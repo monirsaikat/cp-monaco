@@ -389,6 +389,17 @@ button.primary.danger:hover:not(:disabled) {
   transform: rotate(90deg);
 }
 
+.file-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  user-select: none;
+}
+
+.tab .file-icon {
+  margin-right: -1px;
+}
+
 .tree .row .kind {
   color: var(--muted);
 }

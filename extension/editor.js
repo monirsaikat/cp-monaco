@@ -129,6 +129,9 @@
   const SEARCH_CACHE_CHARS = 50 * 1024 * 1024;
 
   const THEMES = window.CPM_THEMES;
+  // Material Icon Theme tables, generated at build time (monaco/file-icons/icons.js).
+  const FILE_ICONS = window.CPM_FILE_ICONS || null;
+  const iconCache = new Map();
   const darkQuery = matchMedia('(prefers-color-scheme: dark)');
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
   const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -438,7 +441,7 @@
       const label = document.createElement('span');
       label.className = 'tab-name';
       label.textContent = tab.file;
-      el.append(label);
+      el.append(fileIcon(tab.file), label);
       if (counts[tab.file] > 1) {
         const hint = document.createElement('span');
         hint.className = 'tab-hint';
@@ -803,7 +806,7 @@
       if (!isDir) chevron.style.visibility = 'hidden';
       const label = document.createElement('span');
       label.textContent = entry.name;
-      row.append(chevron, icon(isDir ? 'i-folder' : 'i-file', 'kind'), label);
+      row.append(chevron, isDir ? folderIcon(entry.name, open) : fileIcon(entry.name), label);
       parent.append(row);
 
       if (open) appendRows(parent, path, depth + 1);
@@ -1066,7 +1069,7 @@
       item.setAttribute('aria-selected', String(index === quick.selected));
       const where = parentOf(result.rel) === '/' || !result.rel.includes('/') ? '' : parentOf(result.rel);
       item.append(
-        icon('i-file', 'kind'),
+        fileIcon(result.file),
         highlight(result.file, result.name, 'q-name'),
         highlight(where, result.where, 'q-dir'),
       );
@@ -2112,7 +2115,7 @@
       const count = document.createElement('span');
       count.className = 'sr-count';
       count.textContent = group.matches.length;
-      head.append(icon('i-chevron', 'chevron'), name, where, count);
+      head.append(icon('i-chevron', 'chevron'), fileIcon(group.file), name, where, count);
       rows.append(head);
       if (collapsed) continue;
 
@@ -2197,6 +2200,56 @@
     return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
   }
 
+  // VS Code's matching order: exact file name, then the longest known extension
+  // ("blade.php" before "php"), then the language the editor detected.
+  function fileIconFile(name) {
+    const lower = name.toLowerCase();
+    const light = document.documentElement.dataset.mode === 'light' ? FILE_ICONS.light : null;
+    const pick = (table, key) => light?.[table]?.[key] || FILE_ICONS[table]?.[key];
+    let file = pick('fileNames', lower);
+    const parts = lower.split('.');
+    for (let i = 1; !file && i < parts.length; i++) file = pick('fileExtensions', parts.slice(i).join('.'));
+    if (!file && window.monaco) {
+      const language = guessLanguage(name);
+      file = pick('languageIds', language === 'shell' ? 'shellscript' : language);
+    }
+    return file || FILE_ICONS.file;
+  }
+
+  function folderIconFile(name, open) {
+    const lower = name.toLowerCase();
+    const table = open ? 'folderNamesExpanded' : 'folderNames';
+    const light = document.documentElement.dataset.mode === 'light' ? FILE_ICONS.light : null;
+    return light?.[table]?.[lower] || FILE_ICONS[table]?.[lower] || (open ? FILE_ICONS.folderExpanded : FILE_ICONS.folder);
+  }
+
+  function iconImage(key, resolve) {
+    const cacheKey = `${document.documentElement.dataset.mode}|${key}`;
+    let file = iconCache.get(cacheKey);
+    if (!file) {
+      file = resolve();
+      iconCache.set(cacheKey, file);
+    }
+    const img = document.createElement('img');
+    img.className = 'file-icon';
+    img.src = `monaco/file-icons/${file}`;
+    img.alt = '';
+    img.width = 16;
+    img.height = 16;
+    img.draggable = false;
+    return img;
+  }
+
+  function fileIcon(name) {
+    if (!FILE_ICONS) return icon('i-file', 'kind');
+    return iconImage(`f|${name}`, () => fileIconFile(name));
+  }
+
+  function folderIcon(name, open) {
+    if (!FILE_ICONS) return icon('i-folder', 'kind');
+    return iconImage(`d|${open ? 1 : 0}|${name}`, () => folderIconFile(name, open));
+  }
+
   function icon(id, className = '') {
     const svg = document.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('class', `icon ${className}`.trim());
@@ -2240,7 +2293,13 @@
     const theme = resolveTheme();
     const colors = { bg: theme.palette?.bg, text: theme.palette?.fg, ...theme.ui };
     const root = document.documentElement;
+    const modeChanged = root.dataset.mode !== theme.mode;
     root.dataset.mode = theme.mode;
+    if (modeChanged && rootDir) {
+      renderTree();
+      renderTabs();
+      renderSearchResults();
+    }
     for (const [name, value] of Object.entries(colors)) {
       root.style.setProperty(`--${name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`, value);
     }

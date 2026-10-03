@@ -11,6 +11,7 @@
   },
   "devDependencies": {
     "emmet-monaco-es": "^5.7.0",
+    "material-icon-theme": "^5.39.0",
     "monaco-editor": "0.52.2"
   }
 }

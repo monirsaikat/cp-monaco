@@ -27,6 +27,7 @@ Open any file in File Manager the way you normally do. Instead of cPanel's built
 - **Review before saving**: compare your changes with the server's version at any time.
 - **Local history**: the last 20 saved versions of each file are kept in your browser for 30 days, with a side-by-side compare and one-click restore.
 - **Remembers your tabs**: the files you had open come back the next time you open the editor on the same account.
+- **File icons** for hundreds of file types and well-known folders, from the Material Icon Theme used in VS Code.
 - **Emmet**: type `ul>li*3`, `.card`, `m10` and the like in HTML, PHP, CSS, SCSS and Less files, then press `Tab` or `Enter` to expand.
 - **Automatic language detection** from the file name: PHP, JavaScript, TypeScript, HTML, CSS/SCSS/Less, JSON, Markdown, YAML, XML, SQL, Python, shell, `.htaccess`, `.env` and more. You can switch manually from the dropdown.
 - **Saves straight to your server** with `Ctrl+S` / `Cmd+S`, using your existing cPanel login.
@@ -227,7 +228,7 @@ cp-monaco/
 │   ├── themes.js         theme definitions (add your own here)
 │   ├── popup.html/.css/.js   the toolbar popup
 │   ├── icons/            logo.svg + PNG icons (16/32/48/128)
-│   └── monaco/           Monaco + Emmet, copied from node_modules by npm install (git-ignored)
+│   └── monaco/           Monaco, Emmet and file icons, copied from node_modules by npm install (git-ignored)
 ├── scripts/
 │   └── copy-monaco.js
 └── package.json
@@ -235,6 +236,7 @@ cp-monaco/
 
 - After editing any file in `extension/`, click the **reload** icon on the extension's card in `chrome://extensions`, then reload the cPanel tab.
 - To update Monaco, change the `monaco-editor` version in `package.json` and run `npm install`. The extension uses Monaco's AMD build (`min/vs`).
+- File icons come from [`material-icon-theme`](https://github.com/material-extensions/vscode-material-icon-theme). `npm install` copies its SVGs to `extension/monaco/file-icons/` and turns its name-to-icon tables into `icons.js` (the editor's CSP doesn't allow `fetch`, even for its own files).
 - Emmet comes from [`emmet-monaco-es`](https://github.com/troy351/emmet-monaco-es). Its plain-script build is copied to `extension/monaco/emmet/`, and the languages it's enabled for are set in `init()` in `editor.js`.
 - To add a theme, copy one of the entries in `extension/themes.js` and change its colors. `palette` controls syntax colors and `ui` controls the toolbar around the editor.
 - To share a build, zip the `extension` folder **after** running `npm install`, so it includes `monaco/`.
@@ -264,10 +266,11 @@ In plain terms:
 
 This summary is just for convenience. The [LICENSE](LICENSE) file is what legally applies.
 
-**Third-party code:** the extension bundles [Monaco Editor](https://github.com/microsoft/monaco-editor), © Microsoft Corporation, and [emmet-monaco-es](https://github.com/troy351/emmet-monaco-es), both MIT-licensed. Their license files are copied into `extension/monaco/` by `npm install`, so they're included automatically when you zip the extension.
+**Third-party code:** the extension bundles [Monaco Editor](https://github.com/microsoft/monaco-editor), © Microsoft Corporation, [emmet-monaco-es](https://github.com/troy351/emmet-monaco-es) and [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme), all MIT-licensed. Their license files are copied into `extension/monaco/` by `npm install`, so they're included automatically when you zip the extension.
 
 ## Credits
 
 - [Monaco Editor](https://github.com/microsoft/monaco-editor) by Microsoft, MIT License.
 - [emmet-monaco-es](https://github.com/troy351/emmet-monaco-es), MIT License, built on [Emmet](https://emmet.io/).
+- File icons from [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) by Material Extensions, MIT License.
 - cPanel is a trademark of cPanel, L.L.C. This project is not affiliated with or endorsed by cPanel.
