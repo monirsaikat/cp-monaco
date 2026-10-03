@@ -83,7 +83,7 @@ A "Saved … at …" message appears in the bottom-left corner when the file has
 The **explorer** on the left starts at your home folder, with the folder of the file you opened already expanded. Click a file to open it in a new tab, or click its tab again later to switch back. The buttons at the top of the explorer show the parent folder, refresh the listing, and open **Go to file**.
 
 - Toggle the explorer with `Ctrl+B` or the sidebar button at the far left of the toolbar. Drag its edge to resize it.
-- Close a tab with its **×**, a middle-click, or `Delete` while the tab is focused.
+- Close a tab with `Alt+W`, its **×**, a middle-click, or `Delete` while the tab is focused. Switch tabs with `Alt+PageUp` / `Alt+PageDown`, or jump straight to one with `Alt+1` … `Alt+9`.
 - `Ctrl+P` searches files under the explorer's top folder. The first search in a session builds a list of files folder by folder, which can take a few seconds on big sites. It skips folders that never hold site code (`.git`, `node_modules`, caches, and `mail`, `logs`, `tmp`, `ssl` and `etc` in your home folder) and stops after 20,000 files. If your site is bigger than that, use the explorer to show a smaller folder first.
 - Images, archives, fonts and other binary files are listed but can't be opened. Files over 5 MB ask for confirmation first.
 - Files opened from the explorer are read and saved as UTF-8. The file you opened from File Manager keeps the encoding cPanel reported for it.
@@ -142,9 +142,12 @@ Most VS Code shortcuts work. The most useful ones:
 | `Ctrl+S` | Save the current tab |
 | `Ctrl+P` | Go to file (add `:line` to jump to a line) |
 | `Ctrl+B` | Show/hide the explorer |
+| `Alt+W` | Close the current tab |
+| `Alt+PageUp` / `Alt+PageDown` | Previous / next tab |
+| `Alt+1` … `Alt+9` | Go to tab 1…8, or the last tab |
 | `Ctrl+Shift+F` | Find in files |
 | `F2` / `Delete` | Rename / move to trash (in the explorer) |
-| `F1` | Command palette |
+| `F1` / `Ctrl+Shift+P` | Command palette |
 | `Ctrl+F` / `Ctrl+H` | Find / Replace |
 | `Ctrl+D` | Select next occurrence |
 | `Alt+Click` | Add another cursor |
@@ -159,6 +162,8 @@ Most VS Code shortcuts work. The most useful ones:
 | `Ctrl+G` | Go to line |
 
 On macOS, use `Cmd` instead of `Ctrl` and `Option` instead of `Alt`.
+
+**Why `Alt+W` and not `Ctrl+W`?** Chrome keeps a few shortcuts for itself and never passes them to web pages or extensions: `Ctrl+W`, `Ctrl+T`, `Ctrl+N`, `Ctrl+Tab`, `Ctrl+Shift+T` and `Ctrl+PageUp/PageDown`. Pressing `Ctrl+W` therefore closes the browser tab, not the file. You get a warning first if anything is unsaved, and your open files come back next time. VS Code in the browser (vscode.dev) has the same limitation.
 
 ## Troubleshooting
 

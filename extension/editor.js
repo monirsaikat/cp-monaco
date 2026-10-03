@@ -308,16 +308,53 @@
   }
 
   function onGlobalKey(event) {
-    if (!(event.ctrlKey || event.metaKey) || event.altKey || document.querySelector('dialog[open]')) return;
-    const key = event.key.toLowerCase();
-    const action = event.shiftKey
-      ? { f: openSearch }[key]
-      : { s: () => save(), p: openQuickOpen, b: toggleSidebar }[key];
+    if (document.querySelector('dialog[open]')) return;
+    const action = shortcutFor(event);
     if (!action) return;
     // Capture phase, so Monaco and the browser (print, bookmarks) never see these.
     event.preventDefault();
     event.stopPropagation();
     action();
+  }
+
+  function shortcutFor(event) {
+    const mod = event.ctrlKey || event.metaKey;
+    if (mod && !event.altKey) {
+      const key = event.key.toLowerCase();
+      return event.shiftKey
+        ? { f: openSearch, p: openCommandPalette }[key]
+        : { s: () => save(), p: openQuickOpen, b: toggleSidebar }[key];
+    }
+    // Chrome never passes Ctrl+W, Ctrl+Tab or Ctrl+PageUp/PageDown to a page, so tab
+    // shortcuts use Alt. Matched by physical key, so Option works on a Mac as well.
+    if (event.altKey && !mod && !event.shiftKey) {
+      // Monaco's find widget uses Alt+C/W/R for its own toggles.
+      if (event.target.closest?.('.find-widget')) return null;
+      if (event.code === 'KeyW') return active ? () => closeTab(active) : null;
+      if (event.code === 'PageDown') return () => cycleTab(1);
+      if (event.code === 'PageUp') return () => cycleTab(-1);
+      const digit = event.code.match(/^Digit([1-9])$/)?.[1];
+      if (digit) return () => openTabAt(Number(digit));
+    }
+    return null;
+  }
+
+  function cycleTab(step) {
+    if (tabs.length < 2) return;
+    const index = tabs.indexOf(active);
+    activate(tabs[(index + step + tabs.length) % tabs.length]);
+  }
+
+  // Alt+1…8 open that tab; Alt+9 the last one, as in VS Code.
+  function openTabAt(position) {
+    const tab = position === 9 ? tabs[tabs.length - 1] : tabs[position - 1];
+    if (tab && tab !== active) activate(tab);
+  }
+
+  function openCommandPalette() {
+    if (!editor) return;
+    editor.focus();
+    editor.trigger('keyboard', 'editor.action.quickCommand', null);
   }
 
   // ---- Tabs ----
@@ -453,7 +490,7 @@
       close.type = 'button';
       close.className = 'tab-close';
       close.tabIndex = -1;
-      close.title = dirty ? 'Unsaved changes. Click to close.' : 'Close';
+      close.title = dirty ? 'Unsaved changes. Click to close (Alt+W).' : 'Close (Alt+W)';
       close.setAttribute('aria-label', `Close ${tab.file}`);
       close.append(icon('i-x'));
       el.append(close);
