@@ -1,0 +1,15 @@
+{
+  "name": "cp-monaco",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome extension that replaces the cPanel File Manager editor with Monaco",
+  "author": "Monir Saikat <monirsaikat1@gmail.com>",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/copy-monaco.js",
+    "postinstall": "node scripts/copy-monaco.js"
+  },
+  "devDependencies": {
+    "monaco-editor": "0.52.2"
+  }
+}

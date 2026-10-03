@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Monaco Editor</title>
+  <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true">
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6" /></symbol>
+    <symbol id="i-contrast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" /></symbol>
+    <symbol id="i-wrap" viewBox="0 0 24 24"><path d="M3 6h18M3 12h15a3 3 0 0 1 0 6h-4M3 18h7" /><path d="M16 16l-2 2 2 2" /></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7M7 3v4a1 1 0 0 0 1 1h7" /></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6l7-3z" /><path d="M9 12l2 2 4-4" /></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 7l9 6 9-6" /></symbol>
+  </svg>
+
+  <header class="bar">
+    <img class="logo" src="icons/logo.svg" alt="cPanel Monaco Editor" title="cPanel Monaco Editor" width="22" height="22">
+    <div class="file">
+      <span class="name" id="name">Loading…</span>
+      <span class="dirty" id="dirty" title="Unsaved changes" hidden></span>
+      <span class="path" id="path"></span>
+    </div>
+    <div class="actions">
+      <label class="select" title="Language mode">
+        <svg class="icon"><use href="#i-code" /></svg>
+        <select id="language" aria-label="Language mode" disabled></select>
+      </label>
+      <label class="select" title="Theme">
+        <svg class="icon"><use href="#i-contrast" /></svg>
+        <select id="theme" aria-label="Theme"></select>
+      </label>
+      <button id="wrap" type="button" aria-pressed="false" title="Toggle word wrap (Alt+Z)">
+        <svg class="icon"><use href="#i-wrap" /></svg>
+        Wrap
+      </button>
+      <button id="classic" type="button" title="Switch back to the stock cPanel editor">
+        <svg class="icon"><use href="#i-back" /></svg>
+        cPanel editor
+      </button>
+      <button id="save" type="button" class="primary" title="Save (Ctrl+S)" disabled>
+        <svg class="icon"><use href="#i-save" /></svg>
+        Save
+      </button>
+    </div>
+  </header>
+
+  <section class="trust" id="trust" hidden>
+    <svg class="icon"><use href="#i-shield" /></svg>
+    <p>
+      <strong>Your code stays between your browser and your server.</strong>
+      No tracking, no third-party servers, and the browser itself blocks this editor from going online.
+    </p>
+    <button id="trust-more" type="button" class="link">How it's enforced</button>
+    <button id="trust-close" type="button" class="close" title="Dismiss" aria-label="Dismiss">
+      <svg class="icon"><use href="#i-x" /></svg>
+    </button>
+  </section>
+
+  <div class="stage">
+    <main id="editor"></main>
+    <div id="overlay" class="overlay">
+      <img src="icons/logo.svg" alt="" width="40" height="40">
+      <p id="overlay-text">Loading editor…</p>
+      <button id="overlay-classic" type="button" hidden>Use cPanel editor</button>
+    </div>
+  </div>
+
+  <footer class="status">
+    <span id="message"></span>
+    <span class="spacer"></span>
+    <span id="cursor"></span>
+    <span id="eol"></span>
+    <span id="charset"></span>
+    <button id="trust-status" type="button" class="status-btn" title="How your code is protected">
+      <svg class="icon"><use href="#i-lock" /></svg>
+      Private
+    </button>
+  </footer>
+
+  <dialog id="trust-dialog" aria-labelledby="trust-title">
+    <div class="dialog-body">
+      <div class="dialog-head">
+        <h2 id="trust-title">How your code is protected</h2>
+        <button id="trust-dialog-close" type="button" class="close" title="Close" aria-label="Close">
+          <svg class="icon"><use href="#i-x" /></svg>
+        </button>
+      </div>
+      <ul class="checks">
+        <li>
+          <svg class="icon"><use href="#i-check" /></svg>
+          <div>
+            <h3>Your files only go to your own server</h3>
+            <p>Files are loaded and saved through your cPanel's own File Manager API, using the login you already have. No other server is involved.</p>
+            <p class="verify">Check it: open DevTools → Network. The only requests are to <code>/execute/Fileman</code> on your cPanel.</p>
+          </div>
+        </li>
+        <li>
+          <svg class="icon"><use href="#i-check" /></svg>
+          <div>
+            <h3>The editor can't go online</h3>
+            <p>This editor runs under a strict Content Security Policy: it can only load files packaged inside the extension, and every network request is blocked. Chrome enforces this, so it doesn't depend on our code behaving.</p>
+            <p class="verify">Check it: <code>content_security_policy</code> in <code>manifest.json</code> sets <code>connect-src 'none'</code>.</p>
+          </div>
+        </li>
+        <li>
+          <svg class="icon"><use href="#i-check" /></svg>
+          <div>
+            <h3>No tracking, no remote code</h3>
+            <p>There's no analytics and no background script. Monaco is bundled inside the extension instead of being loaded from a CDN.</p>
+          </div>
+        </li>
+        <li>
+          <svg class="icon"><use href="#i-check" /></svg>
+          <div>
+            <h3>No extra browser permissions</h3>
+            <p>The extension doesn't ask for your tabs, cookies, history or downloads. Chrome's install prompt mentions all websites only because cPanel can run on any domain. The code activates only on cPanel's file editor page.</p>
+          </div>
+        </li>
+        <li>
+          <svg class="icon"><use href="#i-check" /></svg>
+          <div>
+            <h3>Every line is readable</h3>
+            <p>The extension's own code is a few hundred lines of plain, unminified JavaScript. Open the extension folder and read <code>content.js</code> and <code>editor.js</code>.</p>
+          </div>
+        </li>
+      </ul>
+      <div class="credit">
+        <img src="icons/logo.svg" alt="" width="28" height="28">
+        <div>
+          <strong>cPanel Monaco Editor</strong>
+          <span>Made by Monir Saikat</span>
+        </div>
+        <a href="mailto:monirsaikat1@gmail.com" target="_blank" rel="noopener">
+          <svg class="icon"><use href="#i-mail" /></svg>
+          monirsaikat1@gmail.com
+        </a>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="monaco/vs/loader.js"></script>
+  <script src="themes.js"></script>
+  <script src="editor.js"></script>
+</body>
+</html>
