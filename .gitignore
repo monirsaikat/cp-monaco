@@ -60,3 +60,5 @@ tmp/
 temp/
 *.tmp
 .cache/
+
+linked.txt

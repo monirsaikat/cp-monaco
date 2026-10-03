@@ -17,9 +17,26 @@
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
     <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 7l9 6 9-6" /></symbol>
+    <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6" /></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></symbol>
+    <symbol id="i-goto" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4" /><path d="M14 3v5h5v3" /><circle cx="16.5" cy="16.5" r="3.5" /><path d="M21 21l-2-2" /></symbol>
+    <symbol id="i-files" viewBox="0 0 24 24"><path d="M15 3H9a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7z" /><path d="M15 3v4h4M4 8v11a2 2 0 0 0 2 2h8" /></symbol>
+    <symbol id="i-file-plus" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5M12 11v6M9 14h6" /></symbol>
+    <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M12 10v6M9 13h6" /></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></symbol>
+    <symbol id="i-diff" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16M6.5 10h3M14.5 10h3M16 8.5v3M6.5 15h3M14.5 15h3" /></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l9.5 17h-19z" /><path d="M12 10v4M12 17.5v.01" /></symbol>
   </svg>
 
   <header class="bar">
+    <button id="sidebar-toggle" type="button" class="icon-btn" aria-pressed="true" aria-controls="sidebar" title="Toggle explorer (Ctrl+B)" aria-label="Toggle explorer">
+      <svg class="icon"><use href="#i-sidebar" /></svg>
+    </button>
     <img class="logo" src="icons/logo.svg" alt="cPanel Monaco Editor" title="cPanel Monaco Editor" width="22" height="22">
     <div class="file">
       <span class="name" id="name">Loading…</span>
@@ -37,11 +54,19 @@
       </label>
       <button id="wrap" type="button" aria-pressed="false" title="Toggle word wrap (Alt+Z)">
         <svg class="icon"><use href="#i-wrap" /></svg>
-        Wrap
+        <span class="label">Wrap</span>
+      </button>
+      <button id="review" type="button" title="Compare your changes with the version on the server" disabled>
+        <svg class="icon"><use href="#i-diff" /></svg>
+        <span class="label">Review</span>
+      </button>
+      <button id="history" type="button" title="Earlier versions of this file, kept in this browser" disabled>
+        <svg class="icon"><use href="#i-history" /></svg>
+        <span class="label">History</span>
       </button>
       <button id="classic" type="button" title="Switch back to the stock cPanel editor">
         <svg class="icon"><use href="#i-back" /></svg>
-        cPanel editor
+        <span class="label">cPanel editor</span>
       </button>
       <button id="save" type="button" class="primary" title="Save (Ctrl+S)" disabled>
         <svg class="icon"><use href="#i-save" /></svg>
@@ -62,12 +87,85 @@
     </button>
   </section>
 
-  <div class="stage">
-    <main id="editor"></main>
-    <div id="overlay" class="overlay">
-      <img src="icons/logo.svg" alt="" width="40" height="40">
-      <p id="overlay-text">Loading editor…</p>
-      <button id="overlay-classic" type="button" hidden>Use cPanel editor</button>
+  <div class="workspace">
+    <aside class="sidebar" id="sidebar" aria-label="Sidebar">
+      <div class="sidebar-views" role="tablist" aria-label="Sidebar views">
+        <button id="view-files" type="button" role="tab" aria-selected="true" aria-controls="files-view" title="Explorer">
+          <svg class="icon"><use href="#i-files" /></svg>
+          Files
+        </button>
+        <button id="view-search" type="button" role="tab" aria-selected="false" aria-controls="search-view" title="Find in files (Ctrl+Shift+F)">
+          <svg class="icon"><use href="#i-search" /></svg>
+          Search
+        </button>
+        <span class="spacer"></span>
+        <button id="quick-open-btn" type="button" class="icon-btn small" title="Go to file (Ctrl+P)" aria-label="Go to file">
+          <svg class="icon"><use href="#i-goto" /></svg>
+        </button>
+      </div>
+
+      <div class="view" id="files-view" role="tabpanel" aria-labelledby="view-files">
+        <div class="sidebar-head">
+          <span class="root-name" id="root-name"></span>
+          <button id="new-file" type="button" class="icon-btn small" title="New file" aria-label="New file">
+            <svg class="icon"><use href="#i-file-plus" /></svg>
+          </button>
+          <button id="new-folder" type="button" class="icon-btn small" title="New folder" aria-label="New folder">
+            <svg class="icon"><use href="#i-folder-plus" /></svg>
+          </button>
+          <button id="root-up" type="button" class="icon-btn small" title="Show parent folder" aria-label="Show parent folder">
+            <svg class="icon"><use href="#i-up" /></svg>
+          </button>
+          <button id="tree-refresh" type="button" class="icon-btn small" title="Refresh" aria-label="Refresh">
+            <svg class="icon"><use href="#i-refresh" /></svg>
+          </button>
+        </div>
+        <div class="tree" id="tree" role="tree" aria-label="Files"></div>
+      </div>
+
+      <div class="view" id="search-view" role="tabpanel" aria-labelledby="view-search" hidden>
+        <div class="search-form">
+          <div class="search-box">
+            <input id="search-input" type="text" placeholder="Search" autocomplete="off" spellcheck="false" aria-label="Search text">
+            <button id="search-case" type="button" class="toggle" aria-pressed="false" title="Match case" aria-label="Match case">Aa</button>
+            <button id="search-word" type="button" class="toggle" aria-pressed="false" title="Match whole word" aria-label="Match whole word"><u>ab</u></button>
+            <button id="search-regex" type="button" class="toggle" aria-pressed="false" title="Use regular expression" aria-label="Use regular expression">.*</button>
+          </div>
+          <input id="search-include" type="text" placeholder="Files to include (e.g. *.php, wp-content/themes)" autocomplete="off" spellcheck="false" aria-label="Files to include">
+        </div>
+        <p class="search-status" id="search-status"></p>
+        <div class="search-results" id="search-results"></div>
+      </div>
+    </aside>
+    <div class="resizer" id="resizer" role="separator" aria-orientation="vertical" aria-label="Resize explorer"></div>
+    <div class="main">
+      <div class="tabs" id="tabs" role="tablist" aria-label="Open files"></div>
+      <div class="notice" id="notice" role="status" hidden>
+        <svg class="icon"><use href="#i-alert" /></svg>
+        <p id="notice-text"></p>
+        <div class="notice-actions" id="notice-actions"></div>
+      </div>
+      <div class="stage">
+        <main id="editor"></main>
+        <div class="diff" id="diff" hidden>
+          <div class="diff-bar">
+            <div class="diff-title">
+              <strong id="diff-title"></strong>
+              <span id="diff-legend"></span>
+            </div>
+            <div class="diff-actions" id="diff-actions"></div>
+          </div>
+          <div class="diff-editor" id="diff-editor"></div>
+        </div>
+        <div id="empty" class="overlay" hidden>
+          <p>No file open.<br>Pick one from the explorer, or press <kbd>Ctrl</kbd> + <kbd>P</kbd> to go to a file.</p>
+        </div>
+        <div id="overlay" class="overlay">
+          <img src="icons/logo.svg" alt="" width="40" height="40">
+          <p id="overlay-text">Loading editor…</p>
+          <button id="overlay-classic" type="button" hidden>Use cPanel editor</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -83,6 +181,40 @@
     </button>
   </footer>
 
+  <div class="menu" id="menu" role="menu" hidden></div>
+
+  <dialog id="ask" aria-labelledby="ask-title">
+    <form method="dialog" class="dialog-body ask-body" id="ask-form">
+      <h2 id="ask-title"></h2>
+      <p id="ask-text"></p>
+      <input id="ask-input" type="text" autocomplete="off" spellcheck="false" aria-labelledby="ask-title">
+      <p class="ask-error" id="ask-error" role="alert"></p>
+      <div class="ask-buttons" id="ask-buttons"></div>
+    </form>
+  </dialog>
+
+  <dialog id="history-dialog" aria-labelledby="history-title">
+    <div class="dialog-body">
+      <div class="dialog-head">
+        <h2 id="history-title">History</h2>
+        <button id="history-close" type="button" class="close" title="Close" aria-label="Close">
+          <svg class="icon"><use href="#i-x" /></svg>
+        </button>
+      </div>
+      <ul class="history-list" id="history-list"></ul>
+      <div class="history-foot">
+        <p>Kept only in this browser: up to 20 versions per file, for 30 days.</p>
+        <button id="history-clear" type="button" class="link danger">Clear this file's history</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="quick-open" id="quick-open" role="dialog" aria-label="Go to file" hidden>
+    <input id="quick-input" type="text" placeholder="Search files by name (append :line to jump to a line)" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="quick-list" aria-autocomplete="list">
+    <ul id="quick-list" role="listbox" aria-label="Matching files"></ul>
+    <p class="quick-status" id="quick-status"></p>
+  </div>
+
   <dialog id="trust-dialog" aria-labelledby="trust-title">
     <div class="dialog-body">
       <div class="dialog-head">
@@ -97,7 +229,7 @@
           <div>
             <h3>Your files only go to your own server</h3>
             <p>Files are loaded and saved through your cPanel's own File Manager API, using the login you already have. No other server is involved.</p>
-            <p class="verify">Check it: open DevTools → Network. The only requests are to <code>/execute/Fileman</code> on your cPanel.</p>
+            <p class="verify">Check it: open DevTools → Network. The only requests are to <code>/execute/Fileman</code> and <code>/json-api/cpanel</code> (File Manager functions) on your cPanel.</p>
           </div>
         </li>
         <li>
@@ -112,7 +244,7 @@
           <svg class="icon"><use href="#i-check" /></svg>
           <div>
             <h3>No tracking, no remote code</h3>
-            <p>There's no analytics and no background script. Monaco is bundled inside the extension instead of being loaded from a CDN.</p>
+            <p>There's no analytics and no background script. Monaco and Emmet are bundled inside the extension instead of being loaded from a CDN.</p>
           </div>
         </li>
         <li>
@@ -126,7 +258,15 @@
           <svg class="icon"><use href="#i-check" /></svg>
           <div>
             <h3>Every line is readable</h3>
-            <p>The extension's own code is a few hundred lines of plain, unminified JavaScript. Open the extension folder and read <code>content.js</code> and <code>editor.js</code>.</p>
+            <p>The extension's own code is plain, unminified JavaScript. Open the extension folder and read <code>content.js</code> and <code>editor.js</code>.</p>
+          </div>
+        </li>
+        <li>
+          <svg class="icon"><use href="#i-check" /></svg>
+          <div>
+            <h3>Drafts and history stay in this browser</h3>
+            <p>Unsaved changes, and earlier versions of files you save, are kept in this browser's storage for the extension so you can get them back. They're never uploaded anywhere. History expires after 30 days, and a draft is removed once you save or discard it.</p>
+            <p class="verify"><button id="clear-local" type="button" class="link danger">Delete all drafts and history now</button></p>
           </div>
         </li>
       </ul>
@@ -145,6 +285,7 @@
   </dialog>
 
   <script src="monaco/vs/loader.js"></script>
+  <script src="monaco/emmet/emmet-monaco.min.js"></script>
   <script src="themes.js"></script>
   <script src="editor.js"></script>
 </body>

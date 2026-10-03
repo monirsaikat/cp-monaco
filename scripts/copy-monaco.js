@@ -11,6 +11,11 @@ fs.cpSync(path.join(pkg, 'min', 'vs'), path.join(root, 'vs'), { recursive: true 
 for (const file of ['LICENSE', 'ThirdPartyNotices.txt']) {
   fs.copyFileSync(path.join(pkg, file), path.join(root, file));
 }
+// Emmet for HTML/CSS. The plain-script build defines a single `emmetMonaco` global.
+const emmet = path.join(__dirname, '..', 'node_modules', 'emmet-monaco-es');
+fs.mkdirSync(path.join(root, 'emmet'));
+fs.copyFileSync(path.join(emmet, 'dist', 'emmet-monaco.min.js'), path.join(root, 'emmet', 'emmet-monaco.min.js'));
+fs.copyFileSync(path.join(emmet, 'LICENSE'), path.join(root, 'emmet', 'LICENSE'));
 // The project's own license ships inside the extension folder too.
 fs.copyFileSync(path.join(__dirname, '..', 'LICENSE'), path.join(__dirname, '..', 'extension', 'LICENSE'));
 console.log(`Monaco copied to ${path.relative(process.cwd(), root)}`);

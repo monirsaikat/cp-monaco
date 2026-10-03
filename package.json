@@ -10,6 +10,7 @@
     "postinstall": "node scripts/copy-monaco.js"
   },
   "devDependencies": {
+    "emmet-monaco-es": "^5.7.0",
     "monaco-editor": "0.52.2"
   }
 }
