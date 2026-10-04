@@ -134,3 +134,21 @@ footer a {
 footer a:hover {
   text-decoration: underline;
 }
+
+footer a.repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--text);
+}
+
+footer a.repo svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+footer a.repo:hover {
+  color: var(--accent);
+}
