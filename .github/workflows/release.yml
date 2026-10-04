@@ -1,0 +1,85 @@
+# Publishes a ready-to-load zip to GitHub Releases, so users never need Node or npm.
+#
+#   git tag v1.0.1 && git push origin v1.0.1
+#
+# The tag name becomes the extension version and the release name.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, e.g. 1.0.1 (a test build is uploaded as a workflow artifact, no release)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Work out the version
+        id: version
+        run: |
+          raw="${{ github.event.inputs.version || github.ref_name }}"
+          version="${raw#v}"
+          if ! echo "$version" | grep -Eq '^[0-9]+(\.[0-9]+){0,3}$'; then
+            echo "::error::'$raw' is not a valid version. Chrome allows 1 to 4 dot-separated numbers, e.g. v1.2.3"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "name=cp-monaco-v$version" >> "$GITHUB_OUTPUT"
+
+      # postinstall copies Monaco, Emmet and the file icons into extension/monaco/.
+      - run: npm ci
+
+      - name: Stage the extension
+        run: |
+          mkdir -p dist
+          cp -r extension "dist/${{ steps.version.outputs.name }}"
+          cd "dist/${{ steps.version.outputs.name }}"
+          # Monaco's translations are never used (the UI is English only).
+          rm -f monaco/vs/nls.messages.*.js
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            m.version = '${{ steps.version.outputs.version }}';
+            fs.writeFileSync('manifest.json', JSON.stringify(m, null, 2) + '\n');
+          "
+          # Fail the build if anything the page loads is missing.
+          for f in manifest.json editor.html editor.js content.js monaco/vs/loader.js monaco/vs/editor/editor.main.js monaco/emmet/emmet-monaco.min.js monaco/file-icons/icons.js; do
+            test -f "$f" || { echo "::error::Missing $f in the build"; exit 1; }
+          done
+
+      - name: Zip
+        working-directory: dist
+        run: zip -rq "${{ steps.version.outputs.name }}.zip" "${{ steps.version.outputs.name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.name }}
+          path: dist/${{ steps.version.outputs.name }}.zip
+
+      - name: Publish release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ steps.version.outputs.name }}.zip
+          generate_release_notes: true
+          body: |
+            ## Install
+            1. Download **${{ steps.version.outputs.name }}.zip** below and unzip it somewhere permanent.
+            2. Open `chrome://extensions` and turn on **Developer mode**.
+            3. Click **Load unpacked** and pick the unzipped folder (the one containing `manifest.json`).
+
+            No Node.js or build step needed. To update, replace the folder's contents and click reload on the extension's card.

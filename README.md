@@ -42,14 +42,17 @@ Open any file in File Manager the way you normally do. Instead of cPanel's built
 
 The extension isn't on the Chrome Web Store yet, so you load it manually. It takes about two minutes.
 
-### Option A: from a ready-made zip
+### Option A: download a release (recommended)
 
-If someone shared a zip of the `extension` folder with you:
+No Node.js or build step needed.
 
-1. Unzip it somewhere permanent (for example `Documents/cpanel-monaco`). Chrome loads the extension from that folder every time, so don't delete it.
-2. Go to `chrome://extensions`.
-3. Turn on **Developer mode** (top-right toggle).
-4. Click **Load unpacked** and select the unzipped folder, the one that contains `manifest.json`.
+1. Open the [latest release](https://github.com/monirsaikat/cp-monaco/releases/latest) and download `cp-monaco-vX.Y.Z.zip`.
+2. Unzip it somewhere permanent (for example `Documents/cpanel-monaco`). Chrome loads the extension from that folder every time, so don't delete it.
+3. Go to `chrome://extensions`.
+4. Turn on **Developer mode** (top-right toggle).
+5. Click **Load unpacked** and select the unzipped folder, the one that contains `manifest.json`.
+
+To update, download the new zip, replace the folder's contents, and click the **reload** icon on the extension's card.
 
 ### Option B: from source
 
@@ -84,7 +87,7 @@ The **explorer** on the left starts at your home folder, with the folder of the 
 
 - Toggle the explorer with `Ctrl+B` or the sidebar button at the far left of the toolbar. Drag its edge to resize it.
 - Close a tab with `Alt+W`, its **×**, a middle-click, or `Delete` while the tab is focused. Switch tabs with `Alt+PageUp` / `Alt+PageDown`, or jump straight to one with `Alt+1` … `Alt+9`.
-- `Ctrl+P` searches files under the explorer's top folder. The first search in a session builds a list of files folder by folder, which can take a few seconds on big sites. It skips folders that never hold site code (`.git`, `node_modules`, caches, and `mail`, `logs`, `tmp`, `ssl` and `etc` in your home folder) and stops after 20,000 files. If your site is bigger than that, use the explorer to show a smaller folder first.
+- `Ctrl+P` searches files under the explorer's top folder. The first search in a session builds a list of files folder by folder, which can take a few seconds on big sites. It skips folders that never hold site code (`.git`, `node_modules`, caches, and `mail`, `logs`, `tmp`, `ssl` and `etc` in your home folder) and stops after 10,000 files. If your site is bigger than that, use the explorer to show a smaller folder first.
 - Images, archives, fonts and other binary files are listed but can't be opened. Files over 5 MB ask for confirmation first.
 - Files opened from the explorer are read and saved as UTF-8. The file you opened from File Manager keeps the encoding cPanel reported for it.
 - The tabs you had open are reopened next time (up to 12), as long as you open the editor on the same server and account.
@@ -244,7 +247,15 @@ cp-monaco/
 - File icons come from [`material-icon-theme`](https://github.com/material-extensions/vscode-material-icon-theme). `npm install` copies its SVGs to `extension/monaco/file-icons/` and turns its name-to-icon tables into `icons.js` (the editor's CSP doesn't allow `fetch`, even for its own files).
 - Emmet comes from [`emmet-monaco-es`](https://github.com/troy351/emmet-monaco-es). Its plain-script build is copied to `extension/monaco/emmet/`, and the languages it's enabled for are set in `init()` in `editor.js`.
 - To add a theme, copy one of the entries in `extension/themes.js` and change its colors. `palette` controls syntax colors and `ui` controls the toolbar around the editor.
-- To share a build, zip the `extension` folder **after** running `npm install`, so it includes `monaco/`.
+- **Releasing.** Push a version tag and GitHub Actions builds the zip and publishes it to [Releases](https://github.com/monirsaikat/cp-monaco/releases) (`.github/workflows/release.yml`):
+
+  ```bash
+  git tag v1.0.1
+  git push origin v1.0.1
+  ```
+
+  The workflow runs `npm ci`, stamps the tag's version into `manifest.json`, and attaches `cp-monaco-v1.0.1.zip` to the release. Use **Actions → Release → Run workflow** to try a build without publishing.
+- To make a zip by hand, zip the `extension` folder **after** running `npm install`, so it includes `monaco/`.
 
 ## Compatibility
 
