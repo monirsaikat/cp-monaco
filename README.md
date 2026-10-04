@@ -276,6 +276,8 @@ cp-monaco/
 - Format PHP with `Shift+Alt+F`, running in a background thread with a time limit.
 - Go to file (`Ctrl+P`) opens instantly: the saved file list shows at once and is refreshed behind the scenes.
 - Everything heavy (indexing, formatting) is chunked or runs off the main thread, so typing never stalls.
+- The popup links to the GitHub repository.
+- Fixed the completion list being clipped to a single row.
 
 **1.2.0**
 - Autocomplete for PHP (functions, keywords, superglobals, snippets, variables and `$this->` members) and for HTML tags and attributes inside PHP templates.
