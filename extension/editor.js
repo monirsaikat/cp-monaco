@@ -553,6 +553,10 @@
     if (tabs.some((tab) => isDirty(tab) !== tab.shownDirty)) renderTabs();
     ui.dirty.hidden = !active || !isDirty(active);
     ui.save.disabled = !active || active.saving;
+    const busy = Boolean(active?.saving);
+    ui.save.classList.toggle('busy', busy);
+    ui.save.setAttribute('aria-busy', String(busy));
+    $('save-label').textContent = busy ? 'Saving…' : 'Save';
     sendState();
   }
 

@@ -236,6 +236,33 @@ button.primary {
   font-weight: 500;
 }
 
+button.primary .icon-spinner,
+button.primary.busy .icon-save {
+  display: none;
+}
+
+button.primary.busy .icon-spinner {
+  display: block;
+  animation: cpm-spin 0.8s linear infinite;
+}
+
+button.primary.busy:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
+@keyframes cpm-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.primary.busy .icon-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
 button.primary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 85%, var(--text));
 }
