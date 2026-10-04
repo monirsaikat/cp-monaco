@@ -183,7 +183,21 @@
   };
 
   require.config({ paths: { vs: 'monaco/vs' } });
-  require(['vs/editor/editor.main'], init, (err) => {
+  // If Monaco stalls (slow host, blocked script), say so instead of loading forever.
+  const loadWatchdog = setTimeout(() => {
+    showOverlay('Monaco is taking too long to load.\nOpen DevTools (F12) for details, or switch to the cPanel editor.', true);
+  }, 20000);
+
+  require(['vs/editor/editor.main'], () => {
+    clearTimeout(loadWatchdog);
+    try {
+      init();
+    } catch (err) {
+      console.error('cPanel Monaco: start-up failed', err);
+      showOverlay(`The editor failed to start.\n${err?.message || err}`, true);
+    }
+  }, (err) => {
+    clearTimeout(loadWatchdog);
     showOverlay(`Monaco failed to load.\n${err?.message || err}`, true);
   });
 
