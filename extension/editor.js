@@ -102,15 +102,16 @@
 
   // Quick open walks the folder tree through the same UAPI call as the explorer, so it
   // stays away from folders that are huge or never hold code, and stops at a fixed size.
-  const SKIP_DIRS = new Set(['.git', '.svn', '.hg', 'node_modules', '.cache', 'cache', '.trash']);
+  const SKIP_DIRS = new Set(['.git', '.svn', '.hg', 'node_modules', 'vendor', '.cache', 'cache', '.trash', '__pycache__', '.next', '.venv', 'venv']);
   const SKIP_HOME_DIRS = new Set([
     'mail', 'logs', 'tmp', 'ssl', 'etc', 'access-logs', '.cpanel', '.cagefs', '.caldav', '.htpasswds',
     '.softaculous', '.spamassassin', '.npm', '.composer', '.razor', '.subaccounts', '.cphorde', '.trash',
+    'perl5', 'lscache', '.local', '.config', '.cl.selector', '.nvm', '.pki', 'public_ftp', 'cgi-bin',
   ]);
   const HOME_PATTERN = /^\/home\d*\/[^/]+/;
-  const INDEX_MAX_FILES = 20000;
-  const INDEX_MAX_DIRS = 2500;
-  const INDEX_CONCURRENCY = 6;
+  const INDEX_MAX_FILES = 10000;
+  const INDEX_MAX_DIRS = 1500;
+  const INDEX_CONCURRENCY = 12;
   const QUICK_MAX_RESULTS = 60;
 
   // Must match PROTOCOL in content.js.
@@ -1024,15 +1025,38 @@
     return quick.promise;
   }
 
-  // Breadth-first walk from the explorer's root, a few folders at a time.
+  // Breadth-first walk, a few folders at a time. The folder holding the open file's project
+  // (e.g. public_html) is walked first, so useful results appear before the rest of the
+  // account has been listed.
   async function crawlIndex() {
     const generation = quick.generation;
     const root = rootDir;
     quick.crawling = true;
-    let level = [root];
-    let dirCount = 0;
+    const state = { dirCount: 0, full: false };
 
-    crawl: while (level.length) {
+    const first = projectFolder(root);
+    if (first) await walk([first], new Set(), generation, root, state);
+    if (generation !== quick.generation) return;
+    if (!state.full) await walk([root], new Set(first ? [first] : []), generation, root, state);
+    if (generation !== quick.generation) return;
+
+    quick.truncated = state.full;
+    quick.crawling = false;
+    quick.done = true;
+    scheduleQuickUpdate();
+  }
+
+  // The top-level folder under the explorer root that contains the open file, if any.
+  function projectFolder(root) {
+    if (root.match(HOME_PATTERN)?.[0] !== root || !active) return null;
+    const rest = active.dir.startsWith(root + '/') ? active.dir.slice(root.length + 1) : '';
+    const top = rest.split('/')[0];
+    return top && !SKIP_HOME_DIRS.has(top) ? joinPath(root, top) : null;
+  }
+
+  async function walk(start, skip, generation, root, state) {
+    let level = start;
+    while (level.length) {
       const next = [];
       for (let i = 0; i < level.length; i += INDEX_CONCURRENCY) {
         const batch = level.slice(i, i + INDEX_CONCURRENCY);
@@ -1044,24 +1068,22 @@
           const atHome = dir.match(HOME_PATTERN)?.[0] === dir;
           for (const entry of entries) {
             if (entry.type === 'dir') {
-              if (!SKIP_DIRS.has(entry.name) && !(atHome && SKIP_HOME_DIRS.has(entry.name))) next.push(joinPath(dir, entry.name));
+              const path = joinPath(dir, entry.name);
+              if (!SKIP_DIRS.has(entry.name) && !(atHome && SKIP_HOME_DIRS.has(entry.name)) && !skip.has(path)) next.push(path);
             } else if (!BINARY_EXTENSIONS.has(extensionOf(entry.name.toLowerCase()))) {
               quick.files.push({ dir, file: entry.name, size: entry.size, rel: relativePath(joinPath(dir, entry.name), root) });
             }
           }
         }
-        dirCount += batch.length;
+        state.dirCount += batch.length;
         scheduleQuickUpdate();
-        if (quick.files.length >= INDEX_MAX_FILES || dirCount >= INDEX_MAX_DIRS) {
-          quick.truncated = true;
-          break crawl;
+        if (quick.files.length >= INDEX_MAX_FILES || state.dirCount >= INDEX_MAX_DIRS) {
+          state.full = true;
+          return;
         }
       }
       level = next;
     }
-    quick.crawling = false;
-    quick.done = true;
-    scheduleQuickUpdate();
   }
 
   function scheduleQuickUpdate() {
@@ -2062,7 +2084,7 @@
         scheduleSearchRender();
       }
     };
-    await Promise.all(Array.from({ length: INDEX_CONCURRENCY }, worker));
+    await Promise.all(Array.from({ length: 6 }, worker));
     if (generation !== search.generation) return;
 
     renderSearchResults();
