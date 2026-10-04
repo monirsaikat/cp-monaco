@@ -19,6 +19,7 @@ Open any file in File Manager the way you normally do. Instead of cPanel's built
 
 - **Real VS Code editing**: multi-cursor, bracket matching, folding, command palette (`F1`), find & replace with regex, sticky scroll.
 - **Fast file explorer and tabs**: browse your account's folders in a sidebar and open several files side by side as tabs, without going back to File Manager. Folders load in parallel, and the tree you saw last time appears instantly while it refreshes in the background. Each tab has its own unsaved-changes dot and its own undo history.
+- **Autocomplete for PHP and HTML**: HTML tags, attributes and closing tags (also in the HTML part of `.php` templates), plus PHP built-in functions with parameter placeholders, keywords, superglobals, snippets (`foreach`, `pubf`, `try`…), and the variables, functions, classes and `$this->` members from the file you're editing.
 - **Go to file (`Ctrl+P`)**: fuzzy-search every file in the explorer's folder by name or path. The open file's project folder is indexed first, so results appear almost immediately. Add `:42` to jump straight to line 42.
 - **Find in files (`Ctrl+Shift+F`)**: search the text of every file in the explorer's folder, with match case, whole word, regular expressions and a "files to include" filter.
 - **File operations**: create, rename and delete (move to trash) files and folders from the explorer's right-click menu.
@@ -261,6 +262,10 @@ cp-monaco/
 - To make a zip by hand, zip the `extension` folder **after** running `npm install`, so it includes `monaco/`.
 
 ## What's new
+
+**1.2.0**
+- Autocomplete for PHP (functions, keywords, superglobals, snippets, variables and `$this->` members) and for HTML tags and attributes inside PHP templates.
+- Fixed the completion list showing icons without text.
 
 **1.1.0**
 - Faster explorer: all folders on the path to your file load at once, and the previous tree is shown instantly from a local cache.

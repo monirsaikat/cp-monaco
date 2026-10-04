@@ -214,6 +214,9 @@
       emmetMonaco.emmetCSS(monaco, ['css', 'scss', 'less']);
     }
 
+    // PHP has syntax highlighting in Monaco but no completions, so add our own.
+    window.CPM_PHP?.register(monaco);
+
     for (const theme of THEMES) {
       if (theme.palette) monaco.editor.defineTheme(monacoThemeId(theme), buildMonacoTheme(theme));
     }
@@ -232,6 +235,11 @@
       bracketPairColorization: { enabled: true },
       stickyScroll: { enabled: true },
       fixedOverflowWidgets: true,
+      quickSuggestions: { other: true, comments: false, strings: true },
+      suggestOnTriggerCharacters: true,
+      snippetSuggestions: 'inline',
+      tabCompletion: 'on',
+      suggest: { showWords: true, preview: true },
     });
 
     editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyZ, toggleWrap);
