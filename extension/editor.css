@@ -148,7 +148,7 @@ button.icon-btn.small svg.icon {
   text-align: left;
 }
 
-.actions {
+.toolbar-actions {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -376,14 +376,14 @@ button.primary.danger:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-.tree {
+.file-tree {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding-bottom: 12px;
 }
 
-.tree .row {
+.file-tree .row {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -395,24 +395,24 @@ button.primary.danger:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-.tree .row span {
+.file-tree .row span {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.tree .row .icon {
+.file-tree .row .icon {
   width: 15px;
   height: 15px;
 }
 
-.tree .row .chevron {
+.file-tree .row .chevron {
   width: 13px;
   height: 13px;
   color: var(--muted);
   transition: transform 0.12s;
 }
 
-.tree .row[aria-expanded="true"] .chevron {
+.file-tree .row[aria-expanded="true"] .chevron {
   transform: rotate(90deg);
 }
 
@@ -427,19 +427,19 @@ button.primary.danger:hover:not(:disabled) {
   margin-right: -1px;
 }
 
-.tree .row .kind {
+.file-tree .row .kind {
   color: var(--muted);
 }
 
-.tree .row.active {
+.file-tree .row.active {
   background: color-mix(in srgb, var(--accent) 14%, var(--bar));
 }
 
-.tree .row:focus-visible {
+.file-tree .row:focus-visible {
   outline-offset: -2px;
 }
 
-.tree .note {
+.file-tree .note {
   height: 24px;
   line-height: 24px;
   overflow: hidden;
@@ -449,7 +449,7 @@ button.primary.danger:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-.tree .note.error {
+.file-tree .note.error {
   color: var(--danger);
 }
 
@@ -773,7 +773,7 @@ button.tab-close .icon {
   inset: 0;
 }
 
-.overlay {
+.cover {
   position: absolute;
   inset: 0;
   z-index: 40;
@@ -788,21 +788,21 @@ button.tab-close .icon {
   text-align: center;
 }
 
-.overlay[hidden] {
+.cover[hidden] {
   display: none;
 }
 
-.overlay p {
+.cover p {
   max-width: 520px;
   margin: 0;
   white-space: pre-line;
 }
 
-.overlay img {
+.cover img {
   opacity: 0.9;
 }
 
-.overlay kbd,
+.cover kbd,
 .quick-open kbd {
   padding: 1px 5px;
   border-radius: 4px;
@@ -811,11 +811,11 @@ button.tab-close .icon {
   font-size: 12px;
 }
 
-.overlay.error p {
+.cover.error p {
   color: var(--danger);
 }
 
-.overlay button {
+.cover button {
   background: var(--hover);
 }
 
@@ -910,7 +910,7 @@ button.tab-close .icon {
 
 /* Status bar */
 
-.status {
+.app-status {
   display: flex;
   align-items: center;
   gap: 16px;
@@ -1324,7 +1324,7 @@ dialog::backdrop {
 }
 
 @media (max-width: 1180px) {
-  .actions .label {
+  .toolbar-actions .label {
     display: none;
   }
 }
@@ -1349,4 +1349,13 @@ dialog::backdrop {
   .trust p strong {
     display: block;
   }
+}
+
+#index-status {
+  margin-left: 14px;
+  color: var(--muted);
+}
+
+#index-status:empty {
+  display: none;
 }

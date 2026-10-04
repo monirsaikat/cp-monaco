@@ -111,7 +111,10 @@
     return { name, required: list.filter((p) => !p.endsWith('?')), all: list.map((p) => p.replace('?', '')) };
   }
 
+  const MEMBERS = window.CPM_PHP_MEMBERS;
+
   function register(monaco) {
+    MEMBERS.init(monaco);
     const Kind = monaco.languages.CompletionItemKind;
     const Rule = monaco.languages.CompletionItemInsertTextRule;
     const functions = FUNCTIONS.map(signature);
@@ -130,20 +133,13 @@
         const all = model.getValue();
         const suggestions = [];
 
-        // $this->member
-        if (/\$this->\w*$/.test(line)) {
-          const members = unique([
-            ...[...all.matchAll(/function\s+(\w+)\s*\(/g)].map((m) => [m[1], Kind.Method]),
-            ...[...all.matchAll(/\$this->(\w+)/g)].map((m) => [m[1], Kind.Field]),
-            ...[...all.matchAll(/(?:public|protected|private)\s+(?:static\s+)?(?:readonly\s+)?(?:[\w?\\|]+\s+)?\$(\w+)/g)].map((m) => [m[1], Kind.Field]),
-          ].map((m) => m.join('\0'))).map((s) => s.split('\0'));
-          for (const [label, kind] of members) {
-            suggestions.push({ label, kind: Number(kind), insertText: label, range, sortText: `0${label}` });
-          }
-          return { suggestions };
-        }
-        // Static access (Foo::bar) has no way to be resolved here, so stay quiet.
-        if (/::\w*$/.test(line) || /->\w*$/.test(line)) return { suggestions };
+        // Members after ->, ?-> or ::, resolved through the project index where possible.
+        const members = MEMBERS.member(model, position, line);
+        if (members) return { suggestions: members };
+
+        // use App\Models\Us… (an import at the top of the file)
+        const imports = MEMBERS.importSuggestions(line, position, range);
+        if (imports) return { suggestions: imports };
 
         // Variables: $name, plus superglobals.
         const varStart = line.match(/\$\w*$/);
@@ -169,6 +165,7 @@
             ...phpDefaults,
           });
         }
+        suggestions.push(...MEMBERS.classSuggestions(model, range));
         for (const label of KEYWORDS) suggestions.push({ label, kind: Kind.Keyword, insertText: label, range, sortText: `4${label}` });
         for (const [label, body] of SNIPPETS) {
           suggestions.push({

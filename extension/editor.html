@@ -44,7 +44,7 @@
       <span class="dirty" id="dirty" title="Unsaved changes" hidden></span>
       <span class="path" id="path"></span>
     </div>
-    <div class="actions">
+    <div class="toolbar-actions">
       <label class="select" title="Language mode">
         <svg class="icon"><use href="#i-code" /></svg>
         <select id="language" aria-label="Language mode" disabled></select>
@@ -122,7 +122,7 @@
             <svg class="icon"><use href="#i-refresh" /></svg>
           </button>
         </div>
-        <div class="tree" id="tree" role="tree" aria-label="Files"></div>
+        <div class="file-tree" id="tree" role="tree" aria-label="Files"></div>
       </div>
 
       <div class="view" id="search-view" role="tabpanel" aria-labelledby="view-search" hidden>
@@ -159,10 +159,10 @@
           </div>
           <div class="diff-editor" id="diff-editor"></div>
         </div>
-        <div id="empty" class="overlay" hidden>
+        <div id="empty" class="cover" hidden>
           <p>No file open.<br>Pick one from the explorer, or press <kbd>Ctrl</kbd> + <kbd>P</kbd> to go to a file.</p>
         </div>
-        <div id="overlay" class="overlay">
+        <div id="overlay" class="cover">
           <img src="icons/logo.svg" alt="" width="40" height="40">
           <p id="overlay-text">Loading editor…</p>
           <button id="overlay-classic" type="button" hidden>Use cPanel editor</button>
@@ -171,8 +171,9 @@
     </div>
   </div>
 
-  <footer class="status">
+  <footer class="app-status">
     <span id="message"></span>
+    <span id="index-status" aria-live="polite"></span>
     <span class="spacer"></span>
     <span id="cursor"></span>
     <span id="eol"></span>
@@ -266,9 +267,9 @@
         <li>
           <svg class="icon"><use href="#i-check" /></svg>
           <div>
-            <h3>Drafts and history stay in this browser</h3>
-            <p>Unsaved changes, and earlier versions of files you save, are kept in this browser's storage for the extension so you can get them back. They're never uploaded anywhere. History expires after 30 days, and a draft is removed once you save or discard it.</p>
-            <p class="verify"><button id="clear-local" type="button" class="link danger">Delete all drafts and history now</button></p>
+            <h3>Drafts, history and file lists stay in this browser</h3>
+            <p>Unsaved changes, and earlier versions of files you save, are kept in this browser's storage for the extension so you can get them back. They're never uploaded anywhere. History expires after 30 days, and a draft is removed once you save or discard it. To make search and completion fast, the editor also remembers folder listings, the list of file names in your project, and the names of its PHP classes and methods (never file contents). They're refreshed on every visit.</p>
+            <p class="verify"><button id="clear-local" type="button" class="link danger">Delete all drafts, history and saved lists now</button></p>
           </div>
         </li>
       </ul>
@@ -290,7 +291,11 @@
   <script src="monaco/emmet/emmet-monaco.min.js"></script>
   <script src="monaco/file-icons/icons.js"></script>
   <script src="themes.js"></script>
+  <script src="php-symbols.js"></script>
+  <script src="php-index.js"></script>
+  <script src="php-members.js"></script>
   <script src="php-completions.js"></script>
+  <script src="php-format.js"></script>
   <script src="editor.js"></script>
 </body>
 </html>

@@ -207,6 +207,7 @@
         name: entry.file,
         type: entry.type,
         size: Number(entry.size) || 0,
+        mtime: Number(entry.mtime) || 0,
       }));
   }
 

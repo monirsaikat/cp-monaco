@@ -79,6 +79,7 @@
     historyClose: $('history-close'),
     historyClear: $('history-clear'),
     clearLocal: $('clear-local'),
+    indexStatus: $('index-status'),
   };
 
   // Extensions Monaco doesn't map (or maps poorly) on its own.
@@ -216,6 +217,7 @@
 
     // PHP has syntax highlighting in Monaco but no completions, so add our own.
     window.CPM_PHP?.register(monaco);
+    window.CPM_FORMAT?.register(monaco, setMessage);
 
     for (const theme of THEMES) {
       if (theme.palette) monaco.editor.defineTheme(monacoThemeId(theme), buildMonacoTheme(theme));
@@ -423,6 +425,7 @@
     updateChrome();
     revealInTree(tab.path);
     editor.focus();
+    if (/\.php$/i.test(tab.file)) schedulePhpIndex();
   }
 
   function closeTab(tab) {
@@ -615,6 +618,7 @@
       tab.base = content;
       tab.savedVersion = version;
       updateSearchCache(tab.path, content);
+      if (phpIndex.promise && /\.php$/i.test(tab.file)) window.CPM_PHP_INDEX.update(tab.path, content);
       recordHistory(tab, before, content);
       if (!isDirty(tab) && !tab.draftOffer) {
         clearTimeout(tab.draftTimer);
@@ -809,7 +813,8 @@
         (a.type === b.type ? 0 : a.type === 'dir' ? -1 : 1) || collator.compare(a.name, b.name));
       const changed = listing.stale && !sameEntries(listing.entries, entries);
       Object.assign(listing, { status: 'ok', entries, error: '', stale: false });
-      storeListing(dir, entries);
+      // Only what the explorer shows is worth remembering, not every folder quick open walks.
+      if (dir === rootDir || expanded.has(dir)) storeListing(dir, entries);
       if (changed) renderTree();
       return entries;
     }, (err) => {
@@ -879,8 +884,13 @@
   }
 
   function toggleDir(path) {
-    if (expanded.has(path)) expanded.delete(path);
-    else expanded.add(path);
+    if (expanded.has(path)) {
+      expanded.delete(path);
+    } else {
+      expanded.add(path);
+      const listing = listings.get(path);
+      if (listing?.status === 'ok') storeListing(path, listing.entries);
+    }
     renderTree();
   }
 
@@ -1094,24 +1104,99 @@
   function resetIndex() {
     quick.generation++;
     quick.files = [];
-    quick.crawling = quick.done = quick.truncated = false;
-    quick.promise = null;
+    quick.crawling = quick.done = quick.truncated = quick.refreshing = false;
+    quick.promise = quick.ready = null;
   }
 
+  // After the folder structure changed (create, rename, delete) the saved list is out of date:
+  // it still shows at once next time, but is always refreshed.
+  function forgetIndexCache() {
+    if (rootDir) {
+      quiet(db.getCache(indexCacheKey()).then((record) => record && db.putCache(indexCacheKey(), { ...record, t: 0 })));
+    }
+    resetIndex();
+    quick.stale = true;
+  }
+
+  const indexCacheKey = () => `index|${server}|${rootDir}`;
+  // A saved list younger than this is used as is; an older one is shown at once and refreshed.
+  const INDEX_FRESH_MS = 5 * 60 * 1000;
+
   // Resolves when the file list for the current root is complete (or was reset meanwhile).
+  // The list saved on the last visit is available straight away, long before that.
   function buildIndex() {
-    quick.promise ||= crawlIndex();
+    if (!quick.promise) {
+      const generation = quick.generation;
+      let ready;
+      quick.ready = new Promise((resolve) => { ready = resolve; });
+      quick.promise = (async () => {
+        try {
+          const age = await loadIndexCache();
+          if (generation !== quick.generation) return;
+          if (age !== null) ready();
+          if (age !== null && age < INDEX_FRESH_MS && !quick.stale) {
+            quick.done = true;
+            scheduleQuickUpdate();
+          } else {
+            await crawlIndex(age !== null);
+          }
+        } finally {
+          ready();
+        }
+      })();
+    }
     return quick.promise;
+  }
+
+  // Resolves as soon as there is a usable file list, which may still be refreshing.
+  function indexReady() {
+    buildIndex();
+    return quick.ready;
+  }
+
+  async function loadIndexCache() {
+    const generation = quick.generation;
+    const root = rootDir;
+    let record = null;
+    try {
+      record = await db.getCache(indexCacheKey());
+    } catch {
+      return null;
+    }
+    if (!record || generation !== quick.generation) return null;
+    quick.files = record.rows.map(([d, file, size, mtime]) => {
+      const dir = record.dirs[d];
+      return { dir, file, size, mtime, rel: relativePath(joinPath(dir, file), root) };
+    });
+    quick.truncated = Boolean(record.truncated);
+    scheduleQuickUpdate();
+    return Date.now() - record.t;
+  }
+
+  function saveIndexCache() {
+    const dirs = [];
+    const positions = new Map();
+    const rows = quick.files.map((item) => {
+      let position = positions.get(item.dir);
+      if (position === undefined) {
+        position = dirs.push(item.dir) - 1;
+        positions.set(item.dir, position);
+      }
+      return [position, item.file, item.size, item.mtime || 0];
+    });
+    quiet(db.putCache(indexCacheKey(), { t: Date.now(), truncated: quick.truncated, dirs, rows }));
   }
 
   // Breadth-first walk, a few folders at a time. The folder holding the open file's project
   // (e.g. public_html) is walked first, so useful results appear before the rest of the
-  // account has been listed.
-  async function crawlIndex() {
+  // account has been listed. When a saved list is on screen, the new one is built on the side
+  // and swapped in at the end, so results never flicker.
+  async function crawlIndex(refreshing = false) {
     const generation = quick.generation;
     const root = rootDir;
     quick.crawling = true;
-    const state = { dirCount: 0, full: false };
+    quick.refreshing = refreshing;
+    const state = { dirCount: 0, full: false, files: refreshing ? [] : quick.files };
 
     const first = projectFolder(root);
     if (first) await walk([first], new Set(), generation, root, state);
@@ -1119,9 +1204,11 @@
     if (!state.full) await walk([root], new Set(first ? [first] : []), generation, root, state);
     if (generation !== quick.generation) return;
 
+    quick.files = state.files;
     quick.truncated = state.full;
-    quick.crawling = false;
+    quick.crawling = quick.refreshing = quick.stale = false;
     quick.done = true;
+    saveIndexCache();
     scheduleQuickUpdate();
   }
 
@@ -1150,13 +1237,13 @@
               const path = joinPath(dir, entry.name);
               if (!SKIP_DIRS.has(entry.name) && !(atHome && SKIP_HOME_DIRS.has(entry.name)) && !skip.has(path)) next.push(path);
             } else if (!BINARY_EXTENSIONS.has(extensionOf(entry.name.toLowerCase()))) {
-              quick.files.push({ dir, file: entry.name, size: entry.size, rel: relativePath(joinPath(dir, entry.name), root) });
+              state.files.push({ dir, file: entry.name, size: entry.size, mtime: entry.mtime, rel: relativePath(joinPath(dir, entry.name), root) });
             }
           }
         }
         state.dirCount += batch.length;
-        scheduleQuickUpdate();
-        if (quick.files.length >= INDEX_MAX_FILES || state.dirCount >= INDEX_MAX_DIRS) {
+        if (state.files === quick.files) scheduleQuickUpdate();
+        if (state.files.length >= INDEX_MAX_FILES || state.dirCount >= INDEX_MAX_DIRS) {
           state.full = true;
           return;
         }
@@ -1204,7 +1291,9 @@
 
     const count = quick.files.length.toLocaleString();
     ui.quickStatus.textContent = quick.crawling
-      ? `Indexing ${baseName(rootDir)}… ${count} files so far`
+      ? quick.refreshing
+        ? `${count} files from your last visit. Checking for changes…`
+        : `Indexing ${baseName(rootDir)}… ${count} files so far`
       : quick.truncated
         ? `Searched the first ${count} files. To search everything, browse to a smaller folder in the explorer.`
         : !text && !quick.results.length
@@ -1287,6 +1376,54 @@
     return span;
   }
 
+  // ---- PHP project index (completion across files) ----
+
+  const phpIndex = { key: '', promise: null, timer: 0 };
+
+  function setIndexStatus(text) {
+    ui.indexStatus.textContent = text;
+  }
+
+  // Builds the class index for the open file's project once per visit. It starts shortly after
+  // a PHP file opens, reads files a few at a time in the background, and only re-reads files
+  // whose size or modified time changed since the last visit.
+  function schedulePhpIndex() {
+    if (phpIndex.promise || phpIndex.timer) return;
+    phpIndex.timer = setTimeout(() => {
+      phpIndex.timer = 0;
+      ensurePhpIndex();
+    }, 1500);
+  }
+
+  function ensurePhpIndex() {
+    const project = projectFolder(rootDir) || rootDir;
+    const key = `${server}|${project}`;
+    if (phpIndex.promise && phpIndex.key === key) return phpIndex.promise;
+    phpIndex.key = key;
+    const index = window.CPM_PHP_INDEX;
+    phpIndex.promise = (async () => {
+      try {
+        const saved = await db.getCache(`php|${key}`).catch(() => null);
+        if (saved) index.restore(saved.rows);
+        setIndexStatus('Scanning project…');
+        await indexReady();
+        const candidates = quick.files
+          .filter((item) => (item.dir === project || item.dir.startsWith(`${project}/`)) && /\.php$/i.test(item.file))
+          .map((item) => ({ path: joinPath(item.dir, item.file), size: item.size, mtime: item.mtime || 0 }));
+        await index.build(candidates, {
+          read: (path) => request({ op: 'read', dir: parentOf(path), file: baseName(path), charset: 'utf-8' }),
+          onProgress: (done, total) => setIndexStatus(`Indexing PHP classes… ${done}/${total}`),
+          onSave: () => quiet(db.putCache(`php|${key}`, { t: Date.now(), rows: index.serialize() })),
+        });
+      } catch {
+        // Completion simply stays limited to the open file.
+      } finally {
+        setIndexStatus('');
+      }
+    })();
+    return phpIndex.promise;
+  }
+
   // ---- Local data: drafts and history (IndexedDB), open tabs (localStorage) ----
 
   // Lives in the extension's own origin, so nothing here leaves this browser.
@@ -1298,10 +1435,15 @@
     });
     function open() {
       connection ||= new Promise((resolve, reject) => {
-        const req = indexedDB.open('cpm', 1);
+        const req = indexedDB.open('cpm', 2);
         req.onupgradeneeded = () => {
-          req.result.createObjectStore('drafts', { keyPath: 'key' });
-          req.result.createObjectStore('history', { keyPath: 'id', autoIncrement: true }).createIndex('key', 'key');
+          const database = req.result;
+          if (!database.objectStoreNames.contains('drafts')) database.createObjectStore('drafts', { keyPath: 'key' });
+          if (!database.objectStoreNames.contains('history')) {
+            database.createObjectStore('history', { keyPath: 'id', autoIncrement: true }).createIndex('key', 'key');
+          }
+          // File lists and PHP symbols kept between visits (see "Quick open" and the PHP index).
+          if (!database.objectStoreNames.contains('cache')) database.createObjectStore('cache', { keyPath: 'key' });
         };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
@@ -1315,6 +1457,9 @@
       getDraft: async (key) => done((await store('drafts')).get(key)),
       putDraft: async (draft) => done((await store('drafts', 'readwrite')).put(draft)),
       deleteDraft: async (key) => done((await store('drafts', 'readwrite')).delete(key)),
+      getCache: async (key) => done((await store('cache')).get(key)),
+      putCache: async (key, value) => done((await store('cache', 'readwrite')).put({ ...value, key })),
+      deleteCache: async (key) => done((await store('cache', 'readwrite')).delete(key)),
       history: async (key) => done((await store('history')).index('key').getAll(key)),
       addHistory: async (entry) => done((await store('history', 'readwrite')).add(entry)),
       deleteHistory: async (ids) => {
@@ -1340,6 +1485,7 @@
       clear: async () => {
         await done((await store('drafts', 'readwrite')).clear());
         await done((await store('history', 'readwrite')).clear());
+        await done((await store('cache', 'readwrite')).clear());
       },
     };
   })();
@@ -1941,14 +2087,14 @@
 
   function refreshDir(dir) {
     listings.delete(dir);
-    resetIndex();
+    forgetIndexCache();
     renderTree();
   }
 
   function refreshTree() {
     if (!rootDir) return;
     listings.clear();
-    resetIndex();
+    forgetIndexCache();
     search.cache.clear();
     search.cacheChars = 0;
     renderTree();

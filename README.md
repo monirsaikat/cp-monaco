@@ -19,8 +19,10 @@ Open any file in File Manager the way you normally do. Instead of cPanel's built
 
 - **Real VS Code editing**: multi-cursor, bracket matching, folding, command palette (`F1`), find & replace with regex, sticky scroll.
 - **Fast file explorer and tabs**: browse your account's folders in a sidebar and open several files side by side as tabs, without going back to File Manager. Folders load in parallel, and the tree you saw last time appears instantly while it refreshes in the background. Each tab has its own unsaved-changes dot and its own undo history.
-- **Autocomplete for PHP and HTML**: HTML tags, attributes and closing tags (also in the HTML part of `.php` templates), plus PHP built-in functions with parameter placeholders, keywords, superglobals, snippets (`foreach`, `pubf`, `try`…), and the variables, functions, classes and `$this->` members from the file you're editing.
-- **Go to file (`Ctrl+P`)**: fuzzy-search every file in the explorer's folder by name or path. The open file's project folder is indexed first, so results appear almost immediately. Add `:42` to jump straight to line 42.
+- **Autocomplete for PHP and HTML**: HTML tags, attributes and closing tags (also in the HTML part of `.php` templates), plus PHP built-in functions with parameter placeholders, keywords, superglobals and snippets (`foreach`, `pubf`, `try`…).
+- **Project-aware PHP completion**: after `->` and `::` it knows the methods, properties, constants and enum cases of your own classes, including inherited and trait members, and follows `new Foo`, type hints, `@var` comments, `$this->prop` and call chains such as `$user->posts()->first()->`. Typing a class name from another file adds the `use` import for you, and `use App\Mo…` completes from your project. Class names, method signatures and Eloquent `$fillable` fields are indexed in the background, a few files at a time, and remembered between visits.
+- **Format PHP**: `Shift+Alt+F` formats the file with Prettier's PHP plugin, in a background thread so the editor never freezes. Syntax errors are reported with their line number and your file is left untouched.
+- **Go to file (`Ctrl+P`)**: fuzzy-search every file in the explorer's folder by name or path. The list from your last visit appears instantly and is refreshed in the background; the open file's project folder is indexed first. Add `:42` to jump straight to line 42.
 - **Find in files (`Ctrl+Shift+F`)**: search the text of every file in the explorer's folder, with match case, whole word, regular expressions and a "files to include" filter.
 - **File operations**: create, rename and delete (move to trash) files and folders from the explorer's right-click menu.
 - **Never lose work**: unsaved changes are kept as a draft in your browser and offered back if the page reloads, crashes or the session expires.
@@ -160,7 +162,7 @@ Most VS Code shortcuts work. The most useful ones:
 | `Shift+Alt+↑` / `↓` | Copy line up / down |
 | `Ctrl+/` | Toggle comment |
 | `Ctrl+Shift+[` / `]` | Fold / unfold block |
-| `Shift+Alt+F` | Format document (JS, TS, JSON, HTML, CSS) |
+| `Shift+Alt+F` | Format document (PHP, JS, TS, JSON, HTML, CSS) |
 | `Tab` / `Enter` | Expand the suggested Emmet abbreviation |
 | `Alt+Z` | Toggle word wrap |
 | `Ctrl+G` | Go to line |
@@ -205,7 +207,7 @@ Every claim below can be checked in the source. None of it relies on trusting us
 - **No extra permissions.** The extension doesn't request access to tabs, cookies, history, downloads or storage. (Drafts and history use the standard storage every web page has, which needs no permission.)
   - Chrome's install prompt may say it can "read and change your data on all websites". That's because cPanel can run on any domain, so the match pattern can't be limited to one host. The script only activates on URLs matching `*/cpsess*/frontend/*/filemanager/editit.html*`.
 - **Your theme, word-wrap and banner preferences**, and the list of open tabs, are stored locally in the browser.
-- **Drafts and history stay in your browser.** Unsaved drafts and earlier versions of saved files are kept in the extension's own browser storage (IndexedDB) so you can recover them. They're never uploaded anywhere. History expires after 30 days. Keep in mind that this storage holds whatever the files contain, including secrets in files like `wp-config.php` or `.env`. You can wipe it at any time with **Delete all drafts and history now** in the **Private** panel, or by removing the extension.
+- **Drafts, history and file lists stay in your browser.** Unsaved drafts, earlier versions of saved files, folder listings, the list of file names in your project and the names of its PHP classes and methods (never file contents) are kept in the extension's own browser storage (IndexedDB) so recovery, search and completion are fast. They're never uploaded anywhere. History expires after 30 days. Keep in mind that this storage holds whatever the files contain, including secrets in files like `wp-config.php` or `.env`. You can wipe it at any time with **Delete all drafts, history and saved lists now** in the **Private** panel, or by removing the extension.
 
 No software is "100% secure", and this README won't pretend otherwise. If you find a problem, please email [monirsaikat1@gmail.com](mailto:monirsaikat1@gmail.com).
 
@@ -238,6 +240,11 @@ cp-monaco/
 │   ├── editor.js         tabs, explorer, Go to file, themes
 │   ├── editor.css
 │   ├── themes.js         theme definitions (add your own here)
+│   ├── php-symbols.js    PHP declaration scanner (classes, members, imports)
+│   ├── php-index.js      project-wide class index, built in the background
+│   ├── php-members.js    completion after -> and ::, class names, use imports
+│   ├── php-completions.js   PHP and HTML completion provider
+│   ├── php-format.js, format-worker.js   Format PHP via Prettier in a Web Worker
 │   ├── popup.html/.css/.js   the toolbar popup
 │   ├── icons/            logo.svg + PNG icons (16/32/48/128)
 │   └── monaco/           Monaco, Emmet and file icons, copied from node_modules by npm install (git-ignored)
@@ -249,6 +256,7 @@ cp-monaco/
 - After editing any file in `extension/`, click the **reload** icon on the extension's card in `chrome://extensions`, then reload the cPanel tab.
 - To update Monaco, change the `monaco-editor` version in `package.json` and run `npm install`. The extension uses Monaco's AMD build (`min/vs`).
 - File icons come from [`material-icon-theme`](https://github.com/material-extensions/vscode-material-icon-theme). `npm install` copies its SVGs to `extension/monaco/file-icons/` and turns its name-to-icon tables into `icons.js` (the editor's CSP doesn't allow `fetch`, even for its own files).
+- Prettier and its PHP plugin ([`prettier`](https://prettier.io), [`@prettier/plugin-php`](https://github.com/prettier/plugin-php)) are copied to `extension/monaco/prettier/` and only loaded inside `format-worker.js` the first time you format a file.
 - Emmet comes from [`emmet-monaco-es`](https://github.com/troy351/emmet-monaco-es). Its plain-script build is copied to `extension/monaco/emmet/`, and the languages it's enabled for are set in `init()` in `editor.js`.
 - To add a theme, copy one of the entries in `extension/themes.js` and change its colors. `palette` controls syntax colors and `ui` controls the toolbar around the editor.
 - **Releasing.** Push a version tag and GitHub Actions builds the zip and publishes it to [Releases](https://github.com/monirsaikat/cp-monaco/releases) (`.github/workflows/release.yml`):
@@ -262,6 +270,12 @@ cp-monaco/
 - To make a zip by hand, zip the `extension` folder **after** running `npm install`, so it includes `monaco/`.
 
 ## What's new
+
+**1.3.0**
+- PHP completion that understands your whole project: members after `->` and `::` (with inheritance and traits), type inference, call chains, automatic `use` imports and `use` statement completion.
+- Format PHP with `Shift+Alt+F`, running in a background thread with a time limit.
+- Go to file (`Ctrl+P`) opens instantly: the saved file list shows at once and is refreshed behind the scenes.
+- Everything heavy (indexing, formatting) is chunked or runs off the main thread, so typing never stalls.
 
 **1.2.0**
 - Autocomplete for PHP (functions, keywords, superglobals, snippets, variables and `$this->` members) and for HTML tags and attributes inside PHP templates.
