@@ -18,8 +18,8 @@ Open any file in File Manager the way you normally do. Instead of cPanel's built
 ## Features
 
 - **Real VS Code editing**: multi-cursor, bracket matching, folding, command palette (`F1`), find & replace with regex, sticky scroll.
-- **File explorer and tabs**: browse your account's folders in a sidebar and open several files side by side as tabs, without going back to File Manager. Each tab has its own unsaved-changes dot and its own undo history.
-- **Go to file (`Ctrl+P`)**: fuzzy-search every file in the explorer's folder by name or path. Add `:42` to jump straight to line 42.
+- **Fast file explorer and tabs**: browse your account's folders in a sidebar and open several files side by side as tabs, without going back to File Manager. Folders load in parallel, and the tree you saw last time appears instantly while it refreshes in the background. Each tab has its own unsaved-changes dot and its own undo history.
+- **Go to file (`Ctrl+P`)**: fuzzy-search every file in the explorer's folder by name or path. The open file's project folder is indexed first, so results appear almost immediately. Add `:42` to jump straight to line 42.
 - **Find in files (`Ctrl+Shift+F`)**: search the text of every file in the explorer's folder, with match case, whole word, regular expressions and a "files to include" filter.
 - **File operations**: create, rename and delete (move to trash) files and folders from the explorer's right-click menu.
 - **Never lose work**: unsaved changes are kept as a draft in your browser and offered back if the page reloads, crashes or the session expires.
@@ -30,7 +30,7 @@ Open any file in File Manager the way you normally do. Instead of cPanel's built
 - **File icons** for hundreds of file types and well-known folders, from the Material Icon Theme used in VS Code.
 - **Emmet**: type `ul>li*3`, `.card`, `m10` and the like in HTML, PHP, CSS, SCSS and Less files, then press `Tab` or `Enter` to expand.
 - **Automatic language detection** from the file name: PHP, JavaScript, TypeScript, HTML, CSS/SCSS/Less, JSON, Markdown, YAML, XML, SQL, Python, shell, `.htaccess`, `.env` and more. You can switch manually from the dropdown.
-- **Saves straight to your server** with `Ctrl+S` / `Cmd+S`, using your existing cPanel login.
+- **Saves straight to your server** with `Ctrl+S` / `Cmd+S`, using your existing cPanel login. The Save button shows a spinner while it works.
 - **Unsaved-changes protection**: a dot on each modified tab and next to the file name, a `●` in the browser tab title, a prompt before closing a modified tab, and a browser warning if you try to leave with unsaved work in any tab.
 - **12 themes plus "Match system"**: Light, Dark, GitHub Light/Dark, One Dark, Dracula, Monokai, Nord, Solarized Light/Dark, and high-contrast Light/Dark. The toolbar recolors to match, and your choice is remembered.
 - **Word wrap** toggle, also remembered.
@@ -87,7 +87,7 @@ The **explorer** on the left starts at your home folder, with the folder of the 
 
 - Toggle the explorer with `Ctrl+B` or the sidebar button at the far left of the toolbar. Drag its edge to resize it.
 - Close a tab with `Alt+W`, its **×**, a middle-click, or `Delete` while the tab is focused. Switch tabs with `Alt+PageUp` / `Alt+PageDown`, or jump straight to one with `Alt+1` … `Alt+9`.
-- `Ctrl+P` searches files under the explorer's top folder. The first search in a session builds a list of files folder by folder, which can take a few seconds on big sites. It skips folders that never hold site code (`.git`, `node_modules`, caches, and `mail`, `logs`, `tmp`, `ssl` and `etc` in your home folder) and stops after 10,000 files. If your site is bigger than that, use the explorer to show a smaller folder first.
+- `Ctrl+P` searches files under the explorer's top folder. The first search in a session builds a list of files folder by folder, starting with the folder that holds the file you opened, which can take a few seconds on big sites. It skips folders that never hold site code (`.git`, `node_modules`, `vendor`, caches, and `mail`, `logs`, `tmp`, `ssl`, `etc` and `perl5` in your home folder) and stops after 10,000 files. If your site is bigger than that, use the explorer to show a smaller folder first.
 - Images, archives, fonts and other binary files are listed but can't be opened. Files over 5 MB ask for confirmation first.
 - Files opened from the explorer are read and saved as UTF-8. The file you opened from File Manager keeps the encoding cPanel reported for it.
 - The tabs you had open are reopened next time (up to 12), as long as you open the editor on the same server and account.
@@ -169,6 +169,9 @@ On macOS, use `Cmd` instead of `Ctrl` and `Option` instead of `Alt`.
 **Why `Alt+W` and not `Ctrl+W`?** Chrome keeps a few shortcuts for itself and never passes them to web pages or extensions: `Ctrl+W`, `Ctrl+T`, `Ctrl+N`, `Ctrl+Tab`, `Ctrl+Shift+T` and `Ctrl+PageUp/PageDown`. Pressing `Ctrl+W` therefore closes the browser tab, not the file. You get a warning first if anything is unsaved, and your open files come back next time. VS Code in the browser (vscode.dev) has the same limitation.
 
 ## Troubleshooting
+
+**The editor says "Loading editor…" forever, or "Monaco failed to load".**
+You're running from a copy of the source without its `extension/monaco/` folder. Download a [release zip](https://github.com/monirsaikat/cp-monaco/releases/latest) instead, or run `npm install` in the project first.
 
 **The old cPanel editor still shows up.**
 The extension only runs on cPanel's editor page, whose address looks like:
@@ -256,6 +259,15 @@ cp-monaco/
 
   The workflow runs `npm ci`, stamps the tag's version into `manifest.json`, and attaches `cp-monaco-v1.0.1.zip` to the release. Use **Actions → Release → Run workflow** to try a build without publishing.
 - To make a zip by hand, zip the `extension` folder **after** running `npm install`, so it includes `monaco/`.
+
+## What's new
+
+**1.1.0**
+- Faster explorer: all folders on the path to your file load at once, and the previous tree is shown instantly from a local cache.
+- Faster Go to file: the open file's project folder is indexed first, with more parallel requests and fewer junk folders.
+- Save button shows a spinner and "Saving…" while the file is being written.
+- A clear message if Monaco doesn't load, instead of an endless "Loading…".
+- Releases are published as ready-to-use zips on GitHub.
 
 ## Compatibility
 

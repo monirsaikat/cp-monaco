@@ -693,6 +693,7 @@
     setRoot(home || dir);
     sessionKey = `${server}|${home || dir}`;
     for (let d = dir; isInside(d, rootDir); d = parentOf(d)) expanded.add(d);
+    warmTree();
     renderTree();
     // Some hosts lay out home folders differently; fall back to the file's own folder.
     listDir(rootDir).catch(() => {
@@ -788,19 +789,85 @@
     let listing = listings.get(dir);
     if (!listing) {
       listing = { status: 'loading', entries: [], error: '' };
-      listing.promise = request({ op: 'list', dir }).then((entries) => {
-        listing.status = 'ok';
-        listing.entries = entries.sort((a, b) =>
-          (a.type === b.type ? 0 : a.type === 'dir' ? -1 : 1) || collator.compare(a.name, b.name));
-        return listing.entries;
-      }, (err) => {
-        listing.status = 'error';
-        listing.error = err.message;
-        throw err;
-      });
       listings.set(dir, listing);
+      fetchListing(dir, listing);
     }
     return listing.promise;
+  }
+
+  function fetchListing(dir, listing) {
+    listing.promise = request({ op: 'list', dir }).then((entries) => {
+      entries.sort((a, b) =>
+        (a.type === b.type ? 0 : a.type === 'dir' ? -1 : 1) || collator.compare(a.name, b.name));
+      const changed = listing.stale && !sameEntries(listing.entries, entries);
+      Object.assign(listing, { status: 'ok', entries, error: '', stale: false });
+      storeListing(dir, entries);
+      if (changed) renderTree();
+      return entries;
+    }, (err) => {
+      const wasStale = listing.stale;
+      Object.assign(listing, { status: 'error', error: err.message, stale: false });
+      if (wasStale) renderTree();
+      throw err;
+    });
+  }
+
+  function sameEntries(a, b) {
+    return a.length === b.length && a.every((entry, i) =>
+      entry.name === b[i].name && entry.type === b[i].type && entry.size === b[i].size);
+  }
+
+  // Folder listings from the last visit, so the explorer paints at once and is corrected
+  // when the real listing arrives. Only used when the editor opens; after that, listings are fresh.
+  const LISTING_CACHE_KEY = 'cpm-listings';
+  const LISTING_CACHE_DIRS = 40;
+  const LISTING_CACHE_ENTRIES = 3000;
+  let listingCache = null;
+  let listingCacheTimer = 0;
+
+  function readListingCache() {
+    if (!listingCache) {
+      try {
+        listingCache = JSON.parse(localStorage.getItem(LISTING_CACHE_KEY) || '{}');
+      } catch {
+        listingCache = {};
+      }
+    }
+    return listingCache;
+  }
+
+  function storeListing(dir, entries) {
+    if (entries.length > LISTING_CACHE_ENTRIES) return;
+    readListingCache()[`${server}|${dir}`] = { t: Date.now(), entries };
+    clearTimeout(listingCacheTimer);
+    listingCacheTimer = setTimeout(() => {
+      const cache = readListingCache();
+      const keys = Object.keys(cache).sort((x, y) => cache[y].t - cache[x].t);
+      for (const key of keys.slice(LISTING_CACHE_DIRS)) delete cache[key];
+      try {
+        localStorage.setItem(LISTING_CACHE_KEY, JSON.stringify(cache));
+      } catch {
+        // A convenience only; ignore quota errors.
+      }
+    }, 1000);
+  }
+
+  // Starts listing every folder the explorer is about to show at once, rather than one
+  // level after another, and paints cached listings straight away.
+  function warmTree() {
+    const cache = readListingCache();
+    for (const dir of [rootDir, ...expanded]) {
+      if (listings.has(dir) || (dir !== rootDir && !isInside(dir, rootDir))) continue;
+      const cached = cache[`${server}|${dir}`];
+      if (cached) {
+        const listing = { status: 'ok', entries: cached.entries, error: '', stale: true };
+        listings.set(dir, listing);
+        fetchListing(dir, listing);
+        listing.promise.catch(() => {});
+      } else {
+        listDir(dir).catch(() => {});
+      }
+    }
   }
 
   function toggleDir(path) {
