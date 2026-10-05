@@ -40,7 +40,9 @@
     const exact = byFqn.get(resolved.toLowerCase());
     if (exact) return exact;
     const candidates = byName.get(clean.split('\\').pop().toLowerCase());
-    return candidates ? candidates[0] : null;
+    if (candidates) return candidates[0];
+    const docs = window.CPM_PHP_DOCS;
+    return (docs && (docs.stubClass(resolved) || docs.stubClass(clean))) || null;
   }
 
   // All members of a class, including inherited and trait members. `local` classes (from the
@@ -48,14 +50,15 @@
   function members(cls, local = []) {
     const result = new Map();
     const visited = new Set();
-    const lookup = (fqn) => local.find((c) => c.f.toLowerCase() === fqn.toLowerCase()) || byFqn.get(fqn.toLowerCase());
+    const lookup = (fqn) => local.find((c) => c.f.toLowerCase() === fqn.toLowerCase()) || byFqn.get(fqn.toLowerCase())
+      || (window.CPM_PHP_DOCS && window.CPM_PHP_DOCS.stubClass(fqn));
     const visit = (current, depth, inherited) => {
       if (!current || visited.has(current.f) || depth > 10) return;
       visited.add(current.f);
       for (const member of current.m) {
         if (inherited && member.v === 'private') continue;
         const key = `${member.k === 'm' ? 'm' : member.k === 'p' ? 'p' : 'c'}:${member.n}`;
-        if (!result.has(key)) result.set(key, { ...member, from: current.n });
+        if (!result.has(key)) result.set(key, { ...member, from: current.n, fromFqn: current.f });
       }
       for (const trait of current.t) visit(lookup(trait), depth + 1, false);
       if (current.x) visit(lookup(current.x), depth + 1, true);

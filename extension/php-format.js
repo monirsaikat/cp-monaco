@@ -73,8 +73,8 @@
     }];
   }
 
-  // notify(text, kind) shows a message in the status bar.
-  function register(monaco, notify) {
+  // notify(text, kind) shows a message in the status bar; getVersion() is the "PHP Version" setting.
+  function register(monaco, notify, getVersion = () => 'auto') {
     monaco.languages.registerDocumentFormattingEditProvider('php', {
       displayName: 'Prettier (PHP)',
       async provideDocumentFormattingEdits(model, options) {
@@ -88,7 +88,7 @@
         const result = await run(code, {
           tabWidth: options.tabSize,
           useTabs: !options.insertSpaces,
-          phpVersion: phpVersionFor(code),
+          phpVersion: getVersion() === 'auto' ? phpVersionFor(code) : getVersion(),
           trailingCommaPHP: true,
         });
         if (!result.ok) {

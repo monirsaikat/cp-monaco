@@ -57,7 +57,7 @@ jobs:
             fs.writeFileSync('manifest.json', JSON.stringify(m, null, 2) + '\n');
           "
           # Fail the build if anything the page loads is missing.
-          for f in manifest.json editor.html editor.js content.js monaco/vs/loader.js monaco/vs/editor/editor.main.js monaco/emmet/emmet-monaco.min.js monaco/file-icons/icons.js monaco/prettier/standalone.js monaco/prettier/php.js format-worker.js php-completions.js php-members.js php-index.js php-symbols.js php-format.js; do
+          for f in manifest.json editor.html editor.js content.js monaco/vs/loader.js monaco/vs/editor/editor.main.js monaco/emmet/emmet-monaco.min.js monaco/file-icons/icons.js monaco/prettier/standalone.js monaco/prettier/php.js format-worker.js settings.js settings-ui.js data/php-stubs.js php-docs.js php-completions.js php-members.js php-index.js php-symbols.js php-format.js; do
             test -f "$f" || { echo "::error::Missing $f in the build"; exit 1; }
           done
 

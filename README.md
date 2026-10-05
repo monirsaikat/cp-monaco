@@ -21,6 +21,8 @@ Open any file in File Manager the way you normally do. Instead of cPanel's built
 - **Fast file explorer and tabs**: browse your account's folders in a sidebar and open several files side by side as tabs, without going back to File Manager. Folders load in parallel, and the tree you saw last time appears instantly while it refreshes in the background. Each tab has its own unsaved-changes dot and its own undo history.
 - **Autocomplete for PHP and HTML**: HTML tags, attributes and closing tags (also in the HTML part of `.php` templates), plus PHP built-in functions with parameter placeholders, keywords, superglobals and snippets (`foreach`, `pubf`, `try`…).
 - **Project-aware PHP completion**: after `->` and `::` it knows the methods, properties, constants and enum cases of your own classes, including inherited and trait members, and follows `new Foo`, type hints, `@var` comments, `$this->prop` and call chains such as `$user->posts()->first()->`. Typing a class name from another file adds the `use` import for you, and `use App\Mo…` completes from your project. Class names, method signatures and Eloquent `$fillable` fields are indexed in the background, a few files at a time, and remembered between visits.
+- **Settings page like VS Code's** (`Ctrl+,` or the gear in the toolbar): search, a category tree, a bar beside every setting you've changed and a one-click reset. About 50 settings: font, cursor, tab size and indentation, word wrap, minimap, whitespace, suggestions, color theme, **Auto Save** (after a delay, when the editor loses focus, or when the window does), **Format On Save**, trim trailing whitespace, final newline, hidden files in the explorer, the PHP index and formatter version, and Emmet. Settings apply live. Use the **Server** tab to keep different settings for a particular cPanel server, and type `@modified` in the search box to see everything you've changed.
+- **PHP documentation built in**: completion for PHP's own functions (with parameter placeholders), classes and constants such as `PHP_EOL`; hover any function, method, class, constant or variable for its signature, a description, parameter notes and a link to the manual; **parameter hints** appear as you type a call and follow the argument you're on, for built-in functions, your own classes' methods and functions in the file. Built-in classes work everywhere the project index does, so `$date->`, `catch (Exception $e) { $e->` and a class that `extends Exception` all complete. After `new`, `extends`, `implements`, `instanceof` and `catch (` only classes are offered. Covers the core extensions most sites use (standard, SPL, date, json, mbstring, PDO, mysqli, curl, DOM, and more) for PHP 8.4.
 - **Format PHP**: `Shift+Alt+F` formats the file with Prettier's PHP plugin, in a background thread so the editor never freezes. Syntax errors are reported with their line number and your file is left untouched.
 - **Go to file (`Ctrl+P`)**: fuzzy-search every file in the explorer's folder by name or path. The list from your last visit appears instantly and is refreshed in the background; the open file's project folder is indexed first. Add `:42` to jump straight to line 42.
 - **Find in files (`Ctrl+Shift+F`)**: search the text of every file in the explorer's folder, with match case, whole word, regular expressions and a "files to include" filter.
@@ -146,6 +148,7 @@ Most VS Code shortcuts work. The most useful ones:
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+S` | Save the current tab |
+| `Ctrl+,` | Open Settings |
 | `Ctrl+P` | Go to file (add `:line` to jump to a line) |
 | `Ctrl+B` | Show/hide the explorer |
 | `Alt+W` | Close the current tab |
@@ -206,7 +209,7 @@ Every claim below can be checked in the source. None of it relies on trusting us
 - **No background script, no analytics, no remote code.** Monaco and Emmet are bundled inside the extension rather than loaded from a CDN.
 - **No extra permissions.** The extension doesn't request access to tabs, cookies, history, downloads or storage. (Drafts and history use the standard storage every web page has, which needs no permission.)
   - Chrome's install prompt may say it can "read and change your data on all websites". That's because cPanel can run on any domain, so the match pattern can't be limited to one host. The script only activates on URLs matching `*/cpsess*/frontend/*/filemanager/editit.html*`.
-- **Your theme, word-wrap and banner preferences**, and the list of open tabs, are stored locally in the browser.
+- **Your settings**, the banner preference and the list of open tabs are stored locally in the browser.
 - **Drafts, history and file lists stay in your browser.** Unsaved drafts, earlier versions of saved files, folder listings, the list of file names in your project and the names of its PHP classes and methods (never file contents) are kept in the extension's own browser storage (IndexedDB) so recovery, search and completion are fast. They're never uploaded anywhere. History expires after 30 days. Keep in mind that this storage holds whatever the files contain, including secrets in files like `wp-config.php` or `.env`. You can wipe it at any time with **Delete all drafts, history and saved lists now** in the **Private** panel, or by removing the extension.
 
 No software is "100% secure", and this README won't pretend otherwise. If you find a problem, please email [monirsaikat1@gmail.com](mailto:monirsaikat1@gmail.com).
@@ -240,6 +243,10 @@ cp-monaco/
 │   ├── editor.js         tabs, explorer, Go to file, themes
 │   ├── editor.css
 │   ├── themes.js         theme definitions (add your own here)
+│   ├── settings.js       the list of settings, defaults and where values are stored
+│   ├── settings-ui.js    the Settings page
+│   ├── data/php-stubs.js  PHP built-in functions, classes and constants with docs (generated)
+│   ├── php-docs.js       loads that data on demand and formats it for hovers and completion
 │   ├── php-symbols.js    PHP declaration scanner (classes, members, imports)
 │   ├── php-index.js      project-wide class index, built in the background
 │   ├── php-members.js    completion after -> and ::, class names, use imports
@@ -254,6 +261,7 @@ cp-monaco/
 ```
 
 - After editing any file in `extension/`, click the **reload** icon on the extension's card in `chrome://extensions`, then reload the cPanel tab.
+- The PHP documentation in `extension/data/php-stubs.js` is generated from [JetBrains' phpstorm-stubs](https://github.com/JetBrains/phpstorm-stubs) (Apache License 2.0) by `npm run build:stubs`. The result is committed, so normal builds don't need the network; run it only to update the stubs or change which extensions are included (`EXTENSIONS` in `scripts/build-php-stubs.js`).
 - To update Monaco, change the `monaco-editor` version in `package.json` and run `npm install`. The extension uses Monaco's AMD build (`min/vs`).
 - File icons come from [`material-icon-theme`](https://github.com/material-extensions/vscode-material-icon-theme). `npm install` copies its SVGs to `extension/monaco/file-icons/` and turns its name-to-icon tables into `icons.js` (the editor's CSP doesn't allow `fetch`, even for its own files).
 - Prettier and its PHP plugin ([`prettier`](https://prettier.io), [`@prettier/plugin-php`](https://github.com/prettier/plugin-php)) are copied to `extension/monaco/prettier/` and only loaded inside `format-worker.js` the first time you format a file.
@@ -270,6 +278,11 @@ cp-monaco/
 - To make a zip by hand, zip the `extension` folder **after** running `npm install`, so it includes `monaco/`.
 
 ## What's new
+
+**1.4.0**
+- PHP's built-in functions, classes and constants with documentation: completion, hover, and parameter hints while you type a call. The data (about 1 MB) loads once, while the browser is idle, the first time a PHP file opens, and can be turned off in Settings.
+- After `new`, `extends`, `implements`, `instanceof` and `catch (`, only classes are suggested.
+- A Settings page modeled on VS Code's, with live-applied settings, per-server overrides, Auto Save, Format On Save and more.
 
 **1.3.0**
 - PHP completion that understands your whole project: members after `->` and `::` (with inheritance and traits), type inference, call chains, automatic `use` imports and `use` statement completion.
@@ -315,7 +328,7 @@ In plain terms:
 
 This summary is just for convenience. The [LICENSE](LICENSE) file is what legally applies.
 
-**Third-party code:** the extension bundles [Monaco Editor](https://github.com/microsoft/monaco-editor), © Microsoft Corporation, [emmet-monaco-es](https://github.com/troy351/emmet-monaco-es) and [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme), all MIT-licensed. Their license files are copied into `extension/monaco/` by `npm install`, so they're included automatically when you zip the extension.
+**Third-party code:** the extension bundles [Monaco Editor](https://github.com/microsoft/monaco-editor), © Microsoft Corporation, [emmet-monaco-es](https://github.com/troy351/emmet-monaco-es), [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) and [Prettier](https://prettier.io) with its [PHP plugin](https://github.com/prettier/plugin-php), all MIT-licensed, and PHP signatures and documentation derived from JetBrains' [phpstorm-stubs](https://github.com/JetBrains/phpstorm-stubs), licensed under the Apache License 2.0 (`extension/data/LICENSE-phpstorm-stubs.txt`). Their license files are copied into `extension/monaco/` by `npm install`, so they're included automatically when you zip the extension.
 
 ## Credits
 

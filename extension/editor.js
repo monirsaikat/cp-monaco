@@ -80,6 +80,8 @@
     historyClear: $('history-clear'),
     clearLocal: $('clear-local'),
     indexStatus: $('index-status'),
+    settingsBtn: $('settings-btn'),
+    settingsDialog: $('settings-dialog'),
   };
 
   // Extensions Monaco doesn't map (or maps poorly) on its own.
@@ -117,7 +119,6 @@
 
   // Must match PROTOCOL in content.js.
   const PROTOCOL = 2;
-  const CODE_FONT = '"JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace';
   const DRAFT_DELAY = 800;
   const HISTORY_MAX = 20;
   const HISTORY_DAYS = 30;
@@ -139,6 +140,10 @@
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
   const prefs = loadPrefs();
+  // Everything the user can change lives in settings.js; prefs keeps only layout state.
+  const settings = window.CPM_SETTINGS;
+  settings.setThemes(THEMES);
+  settings.migrate(prefs);
   let editor = null;
   let parentOrigin = null;
   let lastState = '';
@@ -172,10 +177,11 @@
   setupFileOps();
   setupSearch();
   setupHistory();
-  ui.wrap.setAttribute('aria-pressed', String(prefs.wrap));
+  ui.wrap.setAttribute('aria-pressed', String(wrapMode() !== 'off'));
   darkQuery.addEventListener('change', () => {
-    if (prefs.theme === 'system') applyTheme();
+    if (settings.get('workbench.colorTheme') === 'system') applyTheme();
   });
+  settings.onChange(applySettings);
   window.addEventListener('keydown', onGlobalKey, true);
 
   // Monaco's default worker setup uses blob: URLs for chrome-extension:// pages, which the
@@ -210,14 +216,11 @@
     monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions(diagnostics);
 
     // Emmet abbreviations (ul>li*3, .card, m10…) show up as suggestions; Tab or Enter expands them.
-    if (window.emmetMonaco) {
-      emmetMonaco.emmetHTML(monaco, ['html', 'php', 'twig', 'handlebars']);
-      emmetMonaco.emmetCSS(monaco, ['css', 'scss', 'less']);
-    }
+    applyEmmet();
 
     // PHP has syntax highlighting in Monaco but no completions, so add our own.
     window.CPM_PHP?.register(monaco);
-    window.CPM_FORMAT?.register(monaco, setMessage);
+    window.CPM_FORMAT?.register(monaco, setMessage, () => settings.get('php.format.phpVersion'));
 
     for (const theme of THEMES) {
       if (theme.palette) monaco.editor.defineTheme(monacoThemeId(theme), buildMonacoTheme(theme));
@@ -227,21 +230,8 @@
       model: null,
       theme: monacoThemeId(resolveTheme()),
       automaticLayout: true,
-      fontFamily: CODE_FONT,
-      fontSize: 14,
-      wordWrap: prefs.wrap ? 'on' : 'off',
-      minimap: { enabled: true },
-      scrollBeyondLastLine: false,
-      smoothScrolling: true,
-      renderWhitespace: 'selection',
-      bracketPairColorization: { enabled: true },
-      stickyScroll: { enabled: true },
       fixedOverflowWidgets: true,
-      quickSuggestions: { other: true, comments: false, strings: true },
-      suggestOnTriggerCharacters: true,
-      snippetSuggestions: 'inline',
-      tabCompletion: 'on',
-      suggest: { showWords: true, preview: true },
+      ...monacoOptions(),
     });
 
     editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyZ, toggleWrap);
@@ -257,6 +247,7 @@
       if (active) monaco.editor.setModelLanguage(active.model, ui.language.value);
     });
     ui.wrap.addEventListener('click', toggleWrap);
+    setupSettings();
     ui.save.addEventListener('click', () => save());
     ui.review.addEventListener('click', review);
     ui.history.addEventListener('click', openHistory);
@@ -295,6 +286,7 @@
       case 'load': {
         parentOrigin = event.origin;
         server = msg.server;
+        settings.setServer(server);
         setupWorkspace(msg.dir);
         const previous = readSession();
         const tab = addTab(msg);
@@ -305,6 +297,7 @@
       case 'error':
         parentOrigin = event.origin;
         server = msg.server;
+        settings.setServer(server);
         // The explorer still works, so other files can be opened from it.
         setupWorkspace(msg.dir);
         showOverlay(`Couldn't load ${msg.file}.\n${msg.message}`, true);
@@ -348,7 +341,7 @@
       const key = event.key.toLowerCase();
       return event.shiftKey
         ? { f: openSearch, p: openCommandPalette }[key]
-        : { s: () => save(), p: openQuickOpen, b: toggleSidebar }[key];
+        : { s: () => save(), p: openQuickOpen, b: toggleSidebar, ',': () => openSettings() }[key];
     }
     // Chrome never passes Ctrl+W, Ctrl+Tab or Ctrl+PageUp/PageDown to a page, so tab
     // shortcuts use Alt. Matched by physical key, so Option works on a Mac as well.
@@ -390,6 +383,7 @@
     const path = joinPath(dir, file);
     // No file URI: a tab's path can change on rename, and a model's URI can't.
     const model = monaco.editor.createModel(content, guessLanguage(file));
+    applyModelOptions(model);
     const tab = {
       path, dir, file, model, charset,
       base: content,
@@ -407,6 +401,7 @@
     model.onDidChangeContent(() => {
       refreshDirty();
       scheduleDraft(tab);
+      scheduleAutoSave(tab);
     });
     tabs.splice(append || !active ? tabs.length : tabs.indexOf(active) + 1, 0, tab);
     checkDraft(tab);
@@ -425,7 +420,10 @@
     updateChrome();
     revealInTree(tab.path);
     editor.focus();
-    if (/\.php$/i.test(tab.file)) schedulePhpIndex();
+    if (/\.php$/i.test(tab.file)) {
+      loadPhpDocs();
+      schedulePhpIndex();
+    }
   }
 
   function closeTab(tab) {
@@ -595,12 +593,13 @@
 
   // Resolves to true once the file is on the server. Unless `force` is set, it first checks
   // that nobody changed the file since it was opened, and shows the differences if they did.
-  async function save({ force = false } = {}) {
+  async function save({ force = false, auto = false } = {}) {
     const tab = active;
     if (!tab || tab.saving) return false;
     tab.saving = true;
     refreshDirty();
     setMessage(`Saving ${tab.file}…`);
+    await prepareForSave(tab, auto).catch(() => {});
     const version = tab.model.getAlternativeVersionId();
     const content = tab.model.getValue();
     const target = { dir: tab.dir, file: tab.file, charset: tab.charset };
@@ -609,6 +608,10 @@
         // A file that can't be read (e.g. deleted meanwhile) is simply written again.
         const current = await request({ op: 'read', ...target }).then((r) => r.content, () => null);
         if (current !== null && current !== tab.base && current !== content) {
+          if (auto) {
+            setMessage('Auto save skipped: the file changed on the server. Press Ctrl+S to review the differences.', 'error');
+            return false;
+          }
           showConflict(tab, current);
           return false;
         }
@@ -651,10 +654,7 @@
   }
 
   function toggleWrap() {
-    prefs.wrap = !prefs.wrap;
-    savePrefs();
-    editor.updateOptions({ wordWrap: prefs.wrap ? 'on' : 'off' });
-    ui.wrap.setAttribute('aria-pressed', String(prefs.wrap));
+    settings.setEffective('editor.wordWrap', wrapMode() === 'off' ? 'on' : 'off');
   }
 
   // ---- Opening files ----
@@ -922,11 +922,14 @@
       parent.append(noteRow(listing.error, depth, true));
       return;
     }
-    if (!listing.entries.length) {
-      parent.append(noteRow('Empty folder', depth));
+    const entries = settings.get('explorer.showHiddenFiles')
+      ? listing.entries
+      : listing.entries.filter((entry) => !entry.name.startsWith('.'));
+    if (!entries.length) {
+      parent.append(noteRow(listing.entries.length ? 'Only hidden files here' : 'Empty folder', depth));
       return;
     }
-    for (const entry of listing.entries) {
+    for (const entry of entries) {
       const path = joinPath(dir, entry.name);
       const isDir = entry.type === 'dir';
       const open = isDir && expanded.has(path);
@@ -1376,9 +1379,201 @@
     return span;
   }
 
+  // ---- Settings: applying them to Monaco and the page ----
+
+  function wrapMode() {
+    return settings.get('editor.wordWrap');
+  }
+
+  function monacoOptions() {
+    const get = (key) => settings.get(key);
+    const rulers = String(get('editor.rulers')).split(',').map((n) => Number(n.trim())).filter((n) => Number.isInteger(n) && n > 0);
+    return {
+      fontFamily: get('editor.fontFamily').trim() || settings.codeFont,
+      fontSize: get('editor.fontSize'),
+      fontLigatures: get('editor.fontLigatures'),
+      fontWeight: get('editor.fontWeight'),
+      lineHeight: get('editor.lineHeight'),
+      cursorStyle: get('editor.cursorStyle'),
+      cursorBlinking: get('editor.cursorBlinking'),
+      cursorSmoothCaretAnimation: get('editor.cursorSmoothCaretAnimation'),
+      multiCursorModifier: get('editor.multiCursorModifier'),
+      wordWrap: get('editor.wordWrap'),
+      wordWrapColumn: get('editor.wordWrapColumn'),
+      lineNumbers: get('editor.lineNumbers'),
+      minimap: { enabled: get('editor.minimap.enabled') },
+      renderWhitespace: get('editor.renderWhitespace'),
+      renderLineHighlight: get('editor.renderLineHighlight'),
+      rulers,
+      bracketPairColorization: { enabled: get('editor.bracketPairColorization.enabled') },
+      matchBrackets: get('editor.matchBrackets'),
+      guides: { indentation: get('editor.guides.indentation') },
+      stickyScroll: { enabled: get('editor.stickyScroll.enabled') },
+      folding: get('editor.folding'),
+      smoothScrolling: get('editor.smoothScrolling'),
+      scrollBeyondLastLine: get('editor.scrollBeyondLastLine'),
+      mouseWheelZoom: get('editor.mouseWheelZoom'),
+      formatOnPaste: get('editor.formatOnPaste'),
+      formatOnType: get('editor.formatOnType'),
+      autoClosingBrackets: get('editor.autoClosingBrackets'),
+      autoClosingQuotes: get('editor.autoClosingQuotes'),
+      autoIndent: get('editor.autoIndent'),
+      quickSuggestions: get('editor.quickSuggestions') ? { other: true, comments: false, strings: true } : false,
+      suggestOnTriggerCharacters: get('editor.suggestOnTriggerCharacters'),
+      acceptSuggestionOnEnter: get('editor.acceptSuggestionOnEnter'),
+      tabCompletion: get('editor.tabCompletion'),
+      snippetSuggestions: get('editor.snippetSuggestions'),
+      wordBasedSuggestions: get('editor.wordBasedSuggestions'),
+      suggest: { preview: get('editor.suggest.preview') },
+      parameterHints: { enabled: get('editor.parameterHints.enabled') },
+    };
+  }
+
+  function diffFontOptions() {
+    const { fontFamily, fontSize, fontLigatures, fontWeight, lineHeight } = monacoOptions();
+    return { fontFamily, fontSize, fontLigatures, fontWeight, lineHeight };
+  }
+
+  // Indentation belongs to each file's model, not to the editor.
+  function applyModelOptions(model) {
+    const tabSize = settings.get('editor.tabSize');
+    const insertSpaces = settings.get('editor.insertSpaces');
+    model.updateOptions({ tabSize, insertSpaces });
+    if (settings.get('editor.detectIndentation')) model.detectIndentation(insertSpaces, tabSize);
+  }
+
+  const emmet = { disposers: [] };
+  function applyEmmet() {
+    const enabled = settings.get('emmet.enabled');
+    if (enabled && !emmet.disposers.length && window.emmetMonaco) {
+      emmet.disposers = [
+        emmetMonaco.emmetHTML(monaco, ['html', 'php', 'twig', 'handlebars']),
+        emmetMonaco.emmetCSS(monaco, ['css', 'scss', 'less']),
+      ];
+    } else if (!enabled && emmet.disposers.length) {
+      for (const dispose of emmet.disposers) dispose();
+      emmet.disposers = [];
+    }
+  }
+
+  // Runs whenever a setting changes (keys = which ones).
+  function applySettings(keys) {
+    const changed = (...names) => keys.some((key) => names.some((name) => key === name || key.startsWith(name)));
+    if (changed('workbench.colorTheme')) {
+      ui.theme.value = settings.get('workbench.colorTheme');
+      applyTheme();
+    }
+    if (!editor) return;
+    editor.updateOptions(monacoOptions());
+    if (changed('editor.tabSize', 'editor.insertSpaces', 'editor.detectIndentation')) {
+      for (const tab of tabs) applyModelOptions(tab.model);
+    }
+    if (changed('editor.wordWrap')) {
+      ui.wrap.setAttribute('aria-pressed', String(wrapMode() !== 'off'));
+      if (diff.editor) {
+        diff.editor.getModifiedEditor().updateOptions({ wordWrap: wrapMode() });
+        diff.editor.getOriginalEditor().updateOptions({ wordWrap: wrapMode() });
+      }
+    }
+    if (diff.editor && changed('editor.font', 'editor.lineHeight')) diff.editor.updateOptions(diffFontOptions());
+    if (changed('emmet.enabled')) applyEmmet();
+    if (changed('explorer.showHiddenFiles')) renderTree();
+    if (changed('php.builtins.enabled') && window.CPM_PHP_DOCS) {
+      window.CPM_PHP_DOCS.setEnabled(settings.get('php.builtins.enabled'));
+      if (settings.get('php.builtins.enabled') && active && /\.php$/i.test(active.file)) loadPhpDocs();
+    }
+    if (changed('php.index.enabled') && active && /\.php$/i.test(active.file)) schedulePhpIndex();
+    if (changed('files.autoSave')) for (const tab of tabs) scheduleAutoSave(tab);
+  }
+
+  // ---- Auto save, and what happens just before a save ----
+
+  function scheduleAutoSave(tab) {
+    clearTimeout(tab.autoSaveTimer);
+    tab.autoSaveTimer = 0;
+    if (settings.get('files.autoSave') !== 'afterDelay' || !isDirty(tab)) return;
+    tab.autoSaveTimer = setTimeout(() => {
+      tab.autoSaveTimer = 0;
+      if (tab === active && isDirty(tab) && !tab.saving) save({ auto: true });
+      else if (isDirty(tab) && tab !== active) tab.autoSavePending = true;
+    }, settings.get('files.autoSaveDelay'));
+  }
+
+  function autoSaveWhen(mode) {
+    if (settings.get('files.autoSave') !== mode || !active || !isDirty(active) || active.saving) return;
+    save({ auto: true });
+  }
+
+  // Format on save, trimming and the final newline all happen in the editor before the text is read.
+  async function prepareForSave(tab, auto) {
+    if (tab !== active || tab.model.isDisposed()) return;
+    const model = tab.model;
+    const delayed = auto && settings.get('files.autoSave') === 'afterDelay';
+    if (settings.get('editor.formatOnSave') && !delayed) {
+      const action = editor.getAction('editor.action.formatDocument');
+      if (action && action.isSupported()) {
+        await Promise.race([action.run(), new Promise((resolve) => setTimeout(resolve, 25000))]);
+      }
+    }
+    const edits = [];
+    if (settings.get('files.trimTrailingWhitespace')) {
+      for (let line = 1; line <= model.getLineCount(); line++) {
+        const text = model.getLineContent(line);
+        const at = text.search(/[ \t]+$/);
+        if (at !== -1) edits.push({ range: new monaco.Range(line, at + 1, line, text.length + 1), text: '' });
+      }
+    }
+    if (settings.get('files.insertFinalNewline')) {
+      const last = model.getLineCount();
+      if (model.getLineContent(last) !== '') {
+        const column = model.getLineMaxColumn(last);
+        edits.push({ range: new monaco.Range(last, column, last, column), text: model.getEOL() });
+      }
+    }
+    if (edits.length) model.pushEditOperations([], edits, () => null);
+  }
+
+  // ---- The settings page ----
+
+  let settingsPage = null;
+  function openSettings(query = '') {
+    settingsPage ||= window.CPM_SETTINGS_UI.create({ dialog: ui.settingsDialog, icons: icon });
+    settingsPage.open(query);
+  }
+
+  function setupSettings() {
+    ui.settingsBtn.addEventListener('click', () => openSettings());
+    editor.addAction({
+      id: 'cpm.openSettings',
+      label: 'Preferences: Open Settings',
+      run: () => openSettings(),
+    });
+    editor.addAction({
+      id: 'cpm.openModifiedSettings',
+      label: 'Preferences: Show Modified Settings',
+      run: () => openSettings('@modified'),
+    });
+    editor.onDidBlurEditorText(() => autoSaveWhen('onFocusChange'));
+    window.addEventListener('blur', () => {
+      autoSaveWhen('onFocusChange');
+      autoSaveWhen('onWindowChange');
+    });
+  }
+
   // ---- PHP project index (completion across files) ----
 
   const phpIndex = { key: '', promise: null, timer: 0 };
+
+  // PHP's built-in documentation (about 1 MB) is read once, while the browser is idle.
+  function loadPhpDocs() {
+    const docs = window.CPM_PHP_DOCS;
+    if (!docs) return;
+    docs.setEnabled(settings.get('php.builtins.enabled'));
+    if (!settings.get('php.builtins.enabled') || docs.ready()) return;
+    const start = () => docs.load();
+    if (window.requestIdleCallback) window.requestIdleCallback(start, { timeout: 3000 });
+    else setTimeout(start, 500);
+  }
 
   function setIndexStatus(text) {
     ui.indexStatus.textContent = text;
@@ -1388,7 +1583,7 @@
   // a PHP file opens, reads files a few at a time in the background, and only re-reads files
   // whose size or modified time changed since the last visit.
   function schedulePhpIndex() {
-    if (phpIndex.promise || phpIndex.timer) return;
+    if (phpIndex.promise || phpIndex.timer || !settings.get('php.index.enabled')) return;
     phpIndex.timer = setTimeout(() => {
       phpIndex.timer = 0;
       ensurePhpIndex();
@@ -1632,8 +1827,7 @@
       diff.editor = monaco.editor.createDiffEditor(ui.diffEditor, {
         automaticLayout: true,
         originalEditable: false,
-        fontFamily: CODE_FONT,
-        fontSize: 14,
+        ...diffFontOptions(),
         scrollBeyondLastLine: false,
         ignoreTrimWhitespace: false,
         renderMarginRevertIcon: false,
@@ -1645,8 +1839,8 @@
     diff.temp = typeof modified === 'string' ? [originalModel, modifiedModel] : [originalModel];
     ui.diff.hidden = false;
     diff.editor.setModel({ original: originalModel, modified: modifiedModel });
-    diff.editor.getModifiedEditor().updateOptions({ readOnly, wordWrap: prefs.wrap ? 'on' : 'off' });
-    diff.editor.getOriginalEditor().updateOptions({ wordWrap: prefs.wrap ? 'on' : 'off' });
+    diff.editor.getModifiedEditor().updateOptions({ readOnly, wordWrap: wrapMode() });
+    diff.editor.getOriginalEditor().updateOptions({ wordWrap: wrapMode() });
     ui.diffTitle.textContent = title;
     ui.diffLegend.textContent = legend;
     ui.diffActions.replaceChildren(...actions.map(actionButton));
@@ -2568,18 +2762,16 @@
       for (const theme of THEMES.filter((t) => t.mode === mode)) group.append(new Option(theme.label, theme.id));
       ui.theme.append(group);
     }
-    if (prefs.theme !== 'system' && !THEMES.some((t) => t.id === prefs.theme)) prefs.theme = 'system';
-    ui.theme.value = prefs.theme;
+    ui.theme.value = settings.get('workbench.colorTheme');
     ui.theme.addEventListener('change', () => {
-      prefs.theme = ui.theme.value;
-      savePrefs();
-      applyTheme();
+      settings.setEffective('workbench.colorTheme', ui.theme.value);
       editor?.focus();
     });
   }
 
   function resolveTheme() {
-    const id = prefs.theme === 'system' ? (darkQuery.matches ? 'dark' : 'light') : prefs.theme;
+    const choice = settings.get('workbench.colorTheme');
+    const id = choice === 'system' ? (darkQuery.matches ? 'dark' : 'light') : choice;
     return THEMES.find((t) => t.id === id) || THEMES[0];
   }
 

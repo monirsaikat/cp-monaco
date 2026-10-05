@@ -58,7 +58,7 @@
   // Classes from other files in the project; picking one also adds the "use" import.
   function classSuggestions(model, range) {
     const idx = index();
-    if (!idx.size || range.endColumn - range.startColumn < 1) return [];
+    if (range.endColumn - range.startColumn < 1) return [];
     const doc = parsed(model);
     const imported = new Set(Object.values(doc.uses).map((f) => f.toLowerCase()));
     const local = new Set(doc.classes.map((c) => c.f.toLowerCase()));
@@ -77,6 +77,27 @@
         additionalTextEdits: needsImport ? importEdit(model, doc, cls.f) : [],
       });
     }
+    // PHP's own classes (Exception, DateTime, PDO...), documented lazily when one is highlighted.
+    const docs = window.CPM_PHP_DOCS;
+    if (docs && docs.ready()) {
+      for (const name of docs.classNames()) {
+        const lower = name.toLowerCase();
+        if (local.has(lower)) continue;
+        const short = name.split('\\').pop();
+        const namespaced = name.includes('\\');
+        const raw = docs.rawClass(name).raw;
+        const needsImport = namespaced && !imported.has(lower) && name.slice(0, name.lastIndexOf('\\')) !== doc.ns;
+        out.push({
+          label: { label: short, description: namespaced ? name : '' },
+          kind: raw.k === 'i' ? kinds.Interface : raw.k === 'e' ? kinds.Enum : kinds.Class,
+          insertText: short,
+          range,
+          sortText: `3${short}`,
+          additionalTextEdits: needsImport ? importEdit(model, doc, name) : [],
+          _doc: ['c', name],
+        });
+      }
+    }
     return out;
   }
 
@@ -85,9 +106,16 @@
     const m = /^\s*use\s+(?:function\s+|const\s+)?([\w\\]*)$/.exec(line);
     if (!m) return null;
     const importRange = { ...range, startColumn: position.column - m[1].length };
-    return index().all().map((cls) => ({
-      label: cls.f, kind: classKind(cls), insertText: cls.f, filterText: cls.f, range: importRange, sortText: cls.f,
-    }));
+    const docs = window.CPM_PHP_DOCS;
+    const builtIn = docs && docs.ready() ? docs.classNames().filter((name) => name.includes('\\')) : [];
+    return [
+      ...index().all().map((cls) => ({
+        label: cls.f, kind: classKind(cls), insertText: cls.f, filterText: cls.f, range: importRange, sortText: cls.f,
+      })),
+      ...builtIn.map((name) => ({
+        label: name, kind: kinds.Class, insertText: name, filterText: name, range: importRange, sortText: name, _doc: ['c', name],
+      })),
+    ];
   }
 
   // ---- What is on the left of -> or :: ----
@@ -208,6 +236,7 @@
           detail: `${item.from}::${item.n}(${item.sig || ''})${item.t ? `: ${item.t}` : ''}`,
           range,
           sortText: rank,
+          _doc: ['m', item.fromFqn, item.n, item.s],
         });
       } else if (item.k === 'p') {
         if (isStatic !== Boolean(item.s)) continue;
@@ -221,5 +250,208 @@
     return out;
   }
 
-  window.CPM_PHP_MEMBERS = { init, member, classSuggestions, importSuggestions, parsed };
+  // ---- Documentation of built-in things, built only for what you look at ----
+
+  const markdown = (value) => ({ value, isTrusted: false });
+
+  function memberEntry(classFqn, name) {
+    const docs = window.CPM_PHP_DOCS;
+    const found = docs && docs.ready() ? docs.rawClass(classFqn) : null;
+    return found ? { cls: found.name, raw: found.raw, entry: (found.raw.m || {})[name] } : null;
+  }
+
+  // Called by Monaco when a suggestion is highlighted; fills in the documentation panel.
+  function resolveItem(item) {
+    const meta = item._doc;
+    const docs = window.CPM_PHP_DOCS;
+    if (!meta || item.documentation || !docs || !docs.ready()) return item;
+    if (meta[0] === 'f') {
+      const found = docs.fn(meta[1]);
+      if (found) item.documentation = markdown(docs.functionMarkdown(found.name, found.entry));
+    } else if (meta[0] === 'c') {
+      const found = docs.rawClass(meta[1]);
+      if (found) item.documentation = markdown(docs.classMarkdown(found.name, found.raw));
+    } else if (meta[0] === 'm') {
+      const hit = memberEntry(meta[1], meta[2]);
+      if (hit && hit.entry) item.documentation = markdown(docs.methodMarkdown(hit.cls, meta[2], hit.entry, Boolean(meta[3])));
+    }
+    return item;
+  }
+
+  const PHP_WORD = /^[\\\w$]+$/;
+  const CHAIN = /((?:\$\w+|[\\\w]+)(?:(?:->|\?->|::)\w+(?:\((?:[^()]|\([^()]*\))*\))?)*)(->|\?->|::)$/;
+
+  function inPhpBlock(text) {
+    const open = Math.max(text.lastIndexOf('<?php'), text.lastIndexOf('<?='), text.lastIndexOf('<?\n'));
+    return open !== -1 && open > text.lastIndexOf('?>');
+  }
+
+  // What the mouse is over: a member, a function, a class, a constant or a variable.
+  function hover(model, position) {
+    const word = model.getWordAtPosition(position);
+    if (!word || !PHP_WORD.test(word.word)) return null;
+    const line = model.getLineContent(position.lineNumber);
+    const before = line.slice(0, word.startColumn - 1);
+    const after = line.slice(word.endColumn - 1);
+    const upTo = model.getValueInRange({ startLineNumber: Math.max(1, position.lineNumber - 200), startColumn: 1, endLineNumber: position.lineNumber, endColumn: word.startColumn });
+    if (!inPhpBlock(upTo)) return null;
+
+    const docs = window.CPM_PHP_DOCS;
+    const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn };
+    const reply = (value) => ({ range, contents: [markdown(value)] });
+    const name = word.word.replace(/^\$/, '');
+    const doc = parsed(model);
+    const offset = model.getOffsetAt(position);
+
+    // A member: look up the class of whatever is left of -> or ::.
+    const chain = CHAIN.exec(before.slice(-300));
+    if (chain) {
+      const cls = resolveExpression(chain[1], { text: model.getValue(), offset, doc, current: classAt(doc, offset) });
+      if (!cls) return null;
+      const item = index().members(cls, doc.classes).find((m) => m.n === name);
+      if (!item) return null;
+      if (item.k === 'm') {
+        const hit = memberEntry(item.fromFqn, item.n);
+        if (hit && hit.entry && docs) return reply(docs.methodMarkdown(hit.cls, item.n, hit.entry, Boolean(item.s)));
+        return reply(`\`\`\`php\nfunction ${item.from}${item.s ? '::' : '->'}${item.n}(${item.sig || ''})${item.t ? `: ${item.t}` : ''}\n\`\`\``);
+      }
+      const kind = item.k === 'p' ? 'property' : item.k === 'e' ? 'case' : 'const';
+      return reply(`\`\`\`php\n(${kind}) ${item.from}${item.s ? '::' : '->'}${item.k === 'p' && item.s ? '$' : ''}${item.n}${item.t ? `: ${item.t}` : ''}\n\`\`\``);
+    }
+    if (/\bfunction\s+$/.test(before) || /\$$/.test(before)) return null;
+
+    // $variable: say what we think its class is.
+    if (word.word.startsWith('$')) {
+      const type = word.word === '$this' ? (classAt(doc, offset) || {}).f : variableType(word.word, model.getValue(), offset);
+      return type ? reply(`\`\`\`php\n${word.word}: ${type}\n\`\`\``) : null;
+    }
+
+    // function call
+    if (/^\s*\(/.test(after) && docs && docs.ready()) {
+      const found = docs.fn(word.word);
+      if (found) return reply(docs.functionMarkdown(found.name, found.entry));
+    }
+
+    // class name (also after new, extends, instanceof, :: ...)
+    if (/^[A-Z\\]/.test(word.word) || /\bnew\s+$/.test(before)) {
+      const cls = classNamed(word.word, doc);
+      if (cls) {
+        if (cls.stub && docs) {
+          const found = docs.rawClass(cls.f);
+          if (found) return reply(docs.classMarkdown(found.name, found.raw));
+        }
+        const parents = [cls.x && ` extends ${cls.x}`, cls.i.length && ` implements ${cls.i.join(', ')}`].filter(Boolean).join('');
+        return reply(`\`\`\`php\n${cls.k} ${cls.f}${parents}\n\`\`\`${cls.file ? `\n\nDefined in \`${cls.file}\`` : ''}`);
+      }
+    }
+
+    // constant
+    if (docs && docs.ready() && /^[A-Z_][A-Z0-9_]*$/.test(word.word)) {
+      const value = docs.constant(word.word);
+      if (value !== null) return reply(`\`\`\`php\nconst ${word.word}${value ? ` = ${value}` : ''}\n\`\`\``);
+    }
+    return null;
+  }
+
+  // ---- Parameter hints: which argument of which call is being typed ----
+
+  function openCall(chunk) {
+    const stack = [];
+    let i = 0;
+    while (i < chunk.length) {
+      const c = chunk[i];
+      if (c === '\'' || c === '"') {
+        i++;
+        while (i < chunk.length && chunk[i] !== c) i += chunk[i] === '\\' ? 2 : 1;
+      } else if ((c === '/' && chunk[i + 1] === '/') || (c === '#' && chunk[i + 1] !== '[')) {
+        while (i < chunk.length && chunk[i] !== '\n') i++;
+      } else if (c === '/' && chunk[i + 1] === '*') {
+        const end = chunk.indexOf('*/', i + 2);
+        i = end === -1 ? chunk.length : end + 1;
+      } else if ('([{'.includes(c)) {
+        stack.push({ c, at: i, commas: 0 });
+      } else if (')]}'.includes(c)) {
+        stack.pop();
+      } else if (c === ',' && stack.length) {
+        stack[stack.length - 1].commas++;
+      }
+      i++;
+    }
+    for (let k = stack.length - 1; k >= 0; k--) if (stack[k].c === '(') return stack[k];
+    return null;
+  }
+
+  function signatureHelp(model, position) {
+    const offset = model.getOffsetAt(position);
+    const start = Math.max(0, offset - 4000);
+    const from = model.getPositionAt(start);
+    const chunk = model.getValueInRange({ startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: position.lineNumber, endColumn: position.column });
+    if (!inPhpBlock(model.getValueInRange({ startLineNumber: 1, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column }))) return null;
+    const call = openCall(chunk);
+    if (!call) return null;
+
+    const before = chunk.slice(Math.max(0, call.at - 300), call.at);
+    const callee = /(new\s+)?((?:\$\w+|[\\\w]+)(?:(?:->|\?->|::)\w+(?:\((?:[^()]|\([^()]*\))*\))?)*)\s*$/.exec(before);
+    if (!callee) return null;
+    const [, isNew, chain] = callee;
+    const docs = window.CPM_PHP_DOCS;
+    const doc = parsed(model);
+    const current = classAt(doc, offset);
+    let label = '';
+    let description = '';
+    let paramDocs = [];
+    let signature = null;
+
+    const member = /^([\s\S]*?)(->|\?->|::)(\w+)$/.exec(chain);
+    if (isNew) {
+      const cls = classNamed(chain, doc);
+      const ctor = cls && index().members(cls, doc.classes).find((m) => m.k === 'm' && m.n === '__construct');
+      if (ctor) {
+        signature = { name: cls.n, sig: ctor.sig || '', ret: '' };
+        const hit = memberEntry(ctor.fromFqn, '__construct');
+        if (hit && hit.entry) { description = hit.entry.d || ''; paramDocs = hit.entry.p || []; }
+      }
+    } else if (member) {
+      const cls = resolveExpression(member[1], { text: model.getValue(), offset, doc, current });
+      const item = cls && index().members(cls, doc.classes).find((m) => m.k === 'm' && m.n === member[3]);
+      if (item) {
+        signature = { name: item.n, sig: item.sig || '', ret: item.t || '' };
+        const hit = memberEntry(item.fromFqn, item.n);
+        if (hit && hit.entry) { description = hit.entry.d || ''; paramDocs = hit.entry.p || []; }
+      }
+    } else {
+      const found = docs && docs.ready() ? docs.fn(chain) : null;
+      if (found) {
+        signature = { name: found.name, sig: found.entry.s, ret: found.entry.t || '' };
+        description = found.entry.d || '';
+        paramDocs = found.entry.p || [];
+      } else {
+        const own = new RegExp(`function\\s+${chain.replace(/\\/g, '')}\\s*\\(((?:[^()]|\\([^()]*\\))*)\\)(?:\\s*:\\s*([\\w\\\\|?]+))?`).exec(model.getValue());
+        if (own) signature = { name: chain, sig: own[1].replace(/\s+/g, ' ').trim(), ret: own[2] || '' };
+      }
+    }
+    if (!signature) return null;
+
+    const params = docs ? docs.splitParams(signature.sig) : [];
+    label = `${signature.name}(${signature.sig})${signature.ret ? `: ${signature.ret}` : ''}`;
+    let cursor = signature.name.length + 1;
+    const parameters = params.map((text, i) => {
+      const startAt = label.indexOf(text, cursor);
+      cursor = startAt + text.length;
+      return { label: [startAt, startAt + text.length], documentation: paramDocs[i] ? markdown(paramDocs[i]) : undefined };
+    });
+    const last = params.length - 1;
+    const variadic = last >= 0 && params[last].includes('...');
+    const active = Math.min(call.commas, variadic ? last : Math.max(last, 0));
+    return {
+      value: {
+        signatures: [{ label, documentation: description ? markdown(description) : undefined, parameters }],
+        activeSignature: 0,
+        activeParameter: active,
+      },
+      dispose() {},
+    };
+  }
+
+  window.CPM_PHP_MEMBERS = { init, member, classSuggestions, importSuggestions, parsed, resolveItem, hover, signatureHelp };
 })();

@@ -154,16 +154,48 @@
 
         if (!word.word && !/\w$/.test(line)) return { suggestions };
 
-        for (const fn of functions) {
-          const args = fn.required.map((p, i) => `\${${i + 1}:\\$${p}}`).join(', ');
-          suggestions.push({
-            label: { label: fn.name, description: `(${fn.all.join(', ')})` },
-            kind: Kind.Function,
-            insertText: `${fn.name}(${args})`,
-            range,
-            sortText: `3${fn.name}`,
-            ...phpDefaults,
-          });
+        // After new, extends, implements, instanceof or catch ( only a class makes sense.
+        if (/\b(?:new|extends|implements|instanceof)\s+[\\\w]*$/.test(line) || /\bcatch\s*\(\s*(?:[\\\w]+\s*\|\s*)*[\\\w]*$/.test(line)) {
+          for (const m of all.matchAll(/\b(?:class|interface|trait|enum)\s+(\w+)/g)) {
+            suggestions.push({ label: m[1], kind: Kind.Class, insertText: m[1], range, sortText: `0${m[1]}` });
+          }
+          suggestions.push(...MEMBERS.classSuggestions(model, range));
+          return { suggestions };
+        }
+
+        const docs = window.CPM_PHP_DOCS;
+        if (docs && docs.ready()) {
+          for (const fn of docs.functions()) {
+            const args = fn.required.map((p, i) => `\${${i + 1}:\\$${p}}`).join(', ');
+            suggestions.push({
+              label: { label: fn.name, description: `(${fn.sig.length > 56 ? `${fn.sig.slice(0, 53)}...` : fn.sig})` },
+              kind: Kind.Function,
+              insertText: `${fn.name}(${args})`,
+              detail: fn.ret,
+              range,
+              sortText: `3${fn.name}`,
+              _doc: ['f', fn.name],
+              ...phpDefaults,
+            });
+          }
+          // Constants such as E_ALL, PHP_EOL and JSON_PRETTY_PRINT.
+          if (/^[A-Z_]/.test(word.word)) {
+            for (const [name, value] of docs.constantEntries()) {
+              suggestions.push({ label: name, kind: Kind.Constant, insertText: name, detail: value, range, sortText: `5${name}` });
+            }
+          }
+        } else {
+          for (const fn of functions) {
+            const args = fn.required.map((p, i) => `\${${i + 1}:\\$${p}}`).join(', ');
+            suggestions.push({
+              label: { label: fn.name, description: `(${fn.all.join(', ')})` },
+              kind: Kind.Function,
+              insertText: `${fn.name}(${args})`,
+              range,
+              sortText: `3${fn.name}`,
+              ...phpDefaults,
+            });
+          }
         }
         suggestions.push(...MEMBERS.classSuggestions(model, range));
         for (const label of KEYWORDS) suggestions.push({ label, kind: Kind.Keyword, insertText: label, range, sortText: `4${label}` });
@@ -190,6 +222,18 @@
         }
         return { suggestions };
       },
+      // Fills in the documentation panel for the highlighted suggestion only.
+      resolveCompletionItem: (item) => MEMBERS.resolveItem(item),
+    });
+
+    monaco.languages.registerHoverProvider('php', {
+      provideHover: (model, position) => MEMBERS.hover(model, position),
+    });
+
+    monaco.languages.registerSignatureHelpProvider('php', {
+      signatureHelpTriggerCharacters: ['(', ','],
+      signatureHelpRetriggerCharacters: [','],
+      provideSignatureHelp: (model, position) => MEMBERS.signatureHelp(model, position),
     });
   }
 
