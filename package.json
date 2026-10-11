@@ -2,11 +2,12 @@
   "name": "cp-monaco",
   "version": "2.0.0",
   "private": true,
-  "description": "Chrome extension that replaces the cPanel File Manager editor with Monaco",
+  "description": "Chrome and Firefox extension that replaces the cPanel File Manager editor with Monaco",
   "author": "Monir Saikat <monirsaikat1@gmail.com>",
   "license": "MIT",
   "scripts": {
     "build": "node scripts/copy-monaco.js",
+    "build:firefox": "node scripts/build-firefox.js && web-ext lint --source-dir dist/firefox && web-ext build --source-dir dist/firefox --artifacts-dir dist --overwrite-dest",
     "build:stubs": "node scripts/build-php-stubs.js",
     "build:wp-stubs": "node scripts/build-wp-stubs.js",
     "postinstall": "node scripts/copy-monaco.js"
@@ -16,6 +17,8 @@
     "emmet-monaco-es": "^5.7.0",
     "material-icon-theme": "^5.39.0",
     "monaco-editor": "0.52.2",
-    "prettier": "^3.9.9"
+    "monaco-editor-firefox": "npm:monaco-editor@0.49.0",
+    "prettier": "^3.9.9",
+    "web-ext": "10.7.0"
   }
 }

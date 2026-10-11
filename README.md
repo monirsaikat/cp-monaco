@@ -9,7 +9,7 @@
   Made by <strong>Monir Saikat</strong> · <a href="mailto:monirsaikat1@gmail.com">monirsaikat1@gmail.com</a> · <a href="LICENSE">MIT License</a>
 </p>
 
-A Chrome extension that replaces the code editor in cPanel's File Manager with [Monaco](https://microsoft.github.io/monaco-editor/), the editor that powers VS Code.
+A Chrome and Firefox extension that replaces the code editor in cPanel's File Manager with [Monaco](https://microsoft.github.io/monaco-editor/), the editor that powers VS Code.
 
 Open any file in File Manager the way you normally do. Instead of cPanel's built-in editor, you get proper syntax highlighting, multi-cursor editing, find & replace, code folding, a minimap, and the keyboard shortcuts you already know from VS Code.
 
@@ -84,6 +84,16 @@ npm install
 3. Click **Load unpacked** and select the `extension` folder inside the project.
 
 > **Edge, Brave, Opera, Vivaldi** and other Chromium browsers work too. Use their extensions page (`edge://extensions`, `brave://extensions`, …) and follow the same steps.
+
+### Firefox
+
+The Firefox add-on is built from the same source with a Firefox-specific manifest. It needs to be signed by Mozilla before it can be installed permanently in regular Firefox.
+
+Firefox packages Monaco 0.49 because Monaco 0.52's TypeScript worker exceeds Mozilla's 5 MB JavaScript validation limit. The rest of the extension is shared with Chrome.
+
+For a temporary local test, run `npm ci` and `npm run build:firefox`, open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and select `dist/firefox/manifest.json`. Temporary add-ons disappear when Firefox closes.
+
+To submit to [addons.mozilla.org](https://addons.mozilla.org/developers/), upload the `dist/cpanel_monaco_editor-<version>.zip` produced by `npm run build:firefox`, or `cp-monaco-firefox-v<version>.zip` from a GitHub release. The ZIP has `manifest.json` at its root. Select Firefox desktop (version 140 or later). The manifest declares website content and activity because reading and saving files sends requests to the user's own cPanel server; the add-on sends nothing to its developer or third parties. Mozilla may ask for a source archive because bundled third-party libraries are minified; provide the matching GitHub release's source archive and these build steps (`npm ci && npm run build:firefox`). The dependencies and their licenses are listed under **Credits & licenses** below.
 
 ## How to use it
 
@@ -246,9 +256,11 @@ These are converted to UTF-8 for editing and back to their original encoding on 
 
 ## Privacy & security
 
+The [privacy policy](PRIVACY.md) summarizes what the extension stores and sends.
+
 Every claim below can be checked in the source. None of it relies on trusting us.
 
-- **The editor is blocked from the network by the browser.** `manifest.json` gives the editor page a strict Content Security Policy (`default-src 'none'; connect-src 'none'; …`). It can only load files packaged inside the extension, and Chrome refuses any request it tries to make to a server.
+- **The editor is blocked from the network by the browser.** `manifest.json` gives the editor page a strict Content Security Policy (`default-src 'none'; connect-src 'none'; …`). It can only load files packaged inside the extension, and the browser refuses any request it tries to make to a server.
 - **Your files only go to your own server.** `content.js` lists, loads and saves through cPanel's own API (`Fileman::list_files`, `Fileman::get_file_content`, `Fileman::save_file_content` and `Fileman::upload_files`, plus API 2's `Fileman::mkdir` and `Fileman::fileop` for new folders, renaming, copying, moving, permissions, archives and the trash, and cPanel's `/download` address for image previews and downloads) on the server you're already on, using the session you're already logged in with. You can confirm this in DevTools → Network.
 - **No background script, no analytics, no remote code.** Monaco and Emmet are bundled inside the extension rather than loaded from a CDN.
 - **No extra permissions.** The extension doesn't request access to tabs, cookies, history, downloads or storage. (Drafts and history use the standard storage every web page has, which needs no permission.)
@@ -368,7 +380,7 @@ cp-monaco/
 
 ## Compatibility
 
-- **Browsers:** Chrome and other Chromium-based browsers (Manifest V3).
+- **Browsers:** Chrome, Firefox, and other Chromium-based browsers (Manifest V3).
 - **cPanel:** written for the File Manager editor in the Jupiter theme, and any theme whose editor URL matches `*/cpsess*/frontend/*/filemanager/editit.html*`.
 
 ## Author

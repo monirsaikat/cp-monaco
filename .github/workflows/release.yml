@@ -65,16 +65,28 @@ jobs:
         working-directory: dist
         run: zip -rq "${{ steps.version.outputs.name }}.zip" "${{ steps.version.outputs.name }}"
 
+      - name: Build Firefox submission zip
+        env:
+          CPM_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node scripts/build-firefox.js
+          npx web-ext lint --source-dir dist/firefox
+          npx web-ext build --source-dir dist/firefox --artifacts-dir dist --filename "cp-monaco-firefox-v${{ steps.version.outputs.version }}.zip" --overwrite-dest
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.version.outputs.name }}
-          path: dist/${{ steps.version.outputs.name }}.zip
+          path: |
+            dist/${{ steps.version.outputs.name }}.zip
+            dist/cp-monaco-firefox-v${{ steps.version.outputs.version }}.zip
 
       - name: Publish release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ steps.version.outputs.name }}.zip
+          files: |
+            dist/${{ steps.version.outputs.name }}.zip
+            dist/cp-monaco-firefox-v${{ steps.version.outputs.version }}.zip
           generate_release_notes: true
           body: |
             ## Install
@@ -83,3 +95,6 @@ jobs:
             3. Click **Load unpacked** and pick the unzipped folder (the one containing `manifest.json`).
 
             No Node.js or build step needed. To update, replace the folder's contents and click reload on the extension's card.
+
+            ## Firefox
+            **cp-monaco-firefox-v${{ steps.version.outputs.version }}.zip** is the unsigned package for submission to addons.mozilla.org. Mozilla must sign it before regular Firefox can install it permanently. For a temporary test, extract the ZIP and load its `manifest.json` from `about:debugging`.
