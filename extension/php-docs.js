@@ -7,6 +7,7 @@
   'use strict';
 
   const MANUAL = 'https://www.php.net/manual/en/';
+  const WORDPRESS = 'https://developer.wordpress.org/reference/';
   let data = null;
   let enabled = true;
   let loading = null;
@@ -41,6 +42,21 @@
     const map = new Map();
     for (const key of Object.keys(object)) map.set(key.toLowerCase(), key);
     return map;
+  }
+
+  // Adds another set of functions, classes and constants (WordPress's) to PHP's own. Their
+  // entries are marked, so their documentation links go to the right place.
+  function extend(extra) {
+    if (!data || !extra) return;
+    for (const key of ['f', 'c', 'k']) {
+      for (const [name, entry] of Object.entries(extra[key] || {})) {
+        if (Object.prototype.hasOwnProperty.call(data[key], name)) continue;
+        if (entry && typeof entry === 'object') entry.w = 1;
+        data[key][name] = entry;
+      }
+    }
+    lowerFunctions = lowerClasses = functionList = constantList = null;
+    classCache.clear();
   }
 
   // ---- lookups (PHP names are case-insensitive) ----
@@ -143,6 +159,7 @@
 
   const code = (text) => `\`\`\`php\n${text}\n\`\`\``;
   const manual = (path) => (path ? `\n\n[PHP manual](${MANUAL}${path})` : '');
+  const reference = (path) => `\n\n[WordPress reference](${WORDPRESS}${path.toLowerCase()}/)`;
 
   function paramDocs(entry) {
     const params = splitParams(entry.s || '');
@@ -157,24 +174,27 @@
 
   function functionMarkdown(name, entry) {
     const deprecated = entry.x ? '**Deprecated.** ' : '';
-    return `${code(`function ${name}(${entry.s})${entry.t ? `: ${entry.t}` : ''}`)}\n${deprecated}${entry.d || ''}${paramDocs(entry)}${entry.r ? `\n\n**Returns** ${entry.r}` : ''}${manual(entry.l)}`;
+    return `${code(`function ${name}(${entry.s})${entry.t ? `: ${entry.t}` : ''}`)}\n${deprecated}${entry.d || ''}${paramDocs(entry)}${entry.r ? `\n\n**Returns** ${entry.r}` : ''}${entry.w ? reference(`functions/${name}`) : manual(entry.l)}`;
   }
 
   function methodMarkdown(className, name, entry, isStatic) {
-    return `${code(`${isStatic ? 'static ' : ''}function ${className.split('\\').pop()}${isStatic ? '::' : '->'}${name}(${entry.s})${entry.t ? `: ${entry.t}` : ''}`)}\n${entry.d || ''}${paramDocs(entry)}${entry.r ? `\n\n**Returns** ${entry.r}` : ''}${manual(entry.l)}`;
+    const owner = rawClass(className);
+    const link = owner && owner.raw.w ? reference(`classes/${className}/${name}`) : manual(entry.l);
+    return `${code(`${isStatic ? 'static ' : ''}function ${className.split('\\').pop()}${isStatic ? '::' : '->'}${name}(${entry.s})${entry.t ? `: ${entry.t}` : ''}`)}\n${entry.d || ''}${paramDocs(entry)}${entry.r ? `\n\n**Returns** ${entry.r}` : ''}${link}`;
   }
 
   function classMarkdown(name, raw) {
     const kind = KINDS[raw.k] || 'class';
     const extend = raw.x ? ` extends ${raw.x}` : '';
     const implement = raw.i && raw.i.length ? ` ${kind === 'interface' ? 'extends' : 'implements'} ${raw.i.join(', ')}` : '';
-    return `${code(`${kind} ${name}${extend}${implement}`)}\n${raw.d || ''}${manual(raw.l)}`;
+    return `${code(`${kind} ${name}${extend}${implement}`)}\n${raw.d || ''}${raw.w ? reference(`classes/${name}`) : manual(raw.l)}`;
   }
 
   window.CPM_PHP_DOCS = {
     load,
     ready,
     setEnabled,
+    extend,
     fn,
     stubClass,
     rawClass,

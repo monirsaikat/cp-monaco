@@ -14,10 +14,11 @@
   const api2Url = `${session[0]}/json-api/cpanel`;
   // Bumped whenever the messages between this script and editor.js change, so a stale
   // script left in an open tab after an update is detected instead of misbehaving.
-  const PROTOCOL = 2;
+  const PROTOCOL = 3;
   const editorUrl = chrome.runtime.getURL('editor.html');
   const editorOrigin = new URL(editorUrl).origin;
   const requestedCharset = params.get('file_charset') || params.get('charset') || 'utf-8';
+  const ARCHIVE_FORMATS = ['zip', 'tar', 'tar.gz', 'tar.bz2'];
 
   let dirty = false;
   let title = file;
@@ -110,8 +111,8 @@
     }
   }
 
-  async function handleRequest({ op, dir: d, file: f, content, charset, newName }) {
-    if (typeof d !== 'string' || !d.startsWith('/')) throw new Error('Missing folder.');
+  async function handleRequest({ op, dir: d, file: f, content, charset, newName, dest, mode, format, blob, overwrite, files, existingOk }) {
+    checkDir(d);
     if (op !== 'list') checkName(f);
     switch (op) {
       case 'read':
@@ -135,10 +136,14 @@
           await api2('mkfile', { path: d, name: f });
         }
         return {};
-      case 'mkdir':
-        await assertFree(d, f);
+      case 'mkdir': {
+        const taken = (await listDir(d, true)).find((entry) => entry.name === f);
+        // Uploading a folder goes into the folder of that name when there already is one.
+        if (taken && existingOk && taken.type === 'dir') return {};
+        if (taken) throw new Error(`“${f}” already exists in this folder.`);
         await api2('mkdir', { path: d, name: f, permissions: '0755' });
         return {};
+      }
       case 'rename':
         checkName(newName);
         await assertFree(d, newName);
@@ -148,6 +153,55 @@
         // Moves to ~/.trash, where File Manager's "View Trash" can restore it.
         await api2('fileop', { op: 'trash', sourcefiles: joinPath(d, f), doubledecode: 0 });
         return {};
+      case 'copy':
+      case 'move':
+        checkDir(dest);
+        if (newName) checkName(newName);
+        await assertFree(dest, newName || f);
+        // cPanel copies or moves into `destfiles` when it's a folder, and to that exact path otherwise.
+        await api2('fileop', { op, sourcefiles: joinPath(d, f), destfiles: newName ? joinPath(dest, newName) : dest, doubledecode: 0 });
+        return {};
+      case 'chmod':
+        if (!/^[0-7]{3,4}$/.test(mode)) throw new Error('Permissions are three or four digits from 0 to 7, such as 644.');
+        await api2('fileop', { op: 'chmod', sourcefiles: joinPath(d, f), metadata: mode.padStart(4, '0'), doubledecode: 0 });
+        return {};
+      case 'compress':
+        checkName(newName);
+        if (!ARCHIVE_FORMATS.includes(format)) throw new Error('That archive format isn\u2019t supported.');
+        await assertFree(d, newName);
+        await api2('fileop', { op: 'compress', sourcefiles: sourceList(d, Array.isArray(files) ? files : [f]), destfiles: joinPath(d, newName), metadata: format, doubledecode: 0 });
+        return {};
+      case 'extract':
+        checkDir(dest);
+        await api2('fileop', { op: 'extract', sourcefiles: joinPath(d, f), destfiles: dest, doubledecode: 0 });
+        return {};
+      case 'upload': {
+        if (!blob || typeof blob.size !== 'number') throw new Error('Nothing to upload.');
+        const body = new FormData();
+        body.append('dir', d);
+        if (overwrite) body.append('overwrite', '1');
+        body.append('file-1', blob, f);
+        const data = await uapi('upload_files', body, true);
+        const failed = (data.uploads || []).find((item) => !Number(item.status));
+        if (failed) throw new Error(failed.reason || 'cPanel rejected the file.');
+        return {};
+      }
+      case 'download': {
+        // cPanel answers with an attachment, so the browser saves it and this page stays put.
+        const link = document.createElement('a');
+        link.href = downloadUrl(d, f);
+        link.download = f;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        return {};
+      }
+      case 'blob': {
+        // The raw bytes, for previewing images.
+        const res = await fetch(downloadUrl(d, f), { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`cPanel returned HTTP ${res.status}.`);
+        return { blob: await res.blob() };
+      }
       default:
         throw new Error(`Unknown request: ${op}`);
     }
@@ -157,6 +211,23 @@
     if (typeof name !== 'string' || !name || name === '.' || name === '..' || /[/\0]/.test(name)) {
       throw new Error('That name isn\u2019t allowed. Names can\u2019t be empty or contain a slash.');
     }
+  }
+
+  // cPanel takes several files as one comma-separated list.
+  function sourceList(d, names) {
+    for (const name of names) {
+      checkName(name);
+      if (names.length > 1 && name.includes(',')) throw new Error(`“${name}” has a comma in its name, so it can’t be compressed together with other items.`);
+    }
+    return names.map((name) => joinPath(d, name)).join(',');
+  }
+
+  function checkDir(d) {
+    if (typeof d !== 'string' || !d.startsWith('/')) throw new Error('Missing folder.');
+  }
+
+  function downloadUrl(d, f) {
+    return `${session[0]}/download?skipencode=1&file=${encodeURIComponent(joinPath(d, f))}`;
   }
 
   async function assertFree(d, name) {
@@ -208,11 +279,12 @@
         type: entry.type,
         size: Number(entry.size) || 0,
         mtime: Number(entry.mtime) || 0,
+        mode: entry.nicemode || '',
       }));
   }
 
-  // A few file operations (new folder, rename, move to trash) only exist in cPanel's
-  // older API 2, which File Manager itself still uses.
+  // Most file operations (new folder, rename, copy, move, permissions, archives, trash) only
+  // exist in cPanel's older API 2, which File Manager itself still uses.
   async function api2(fn, fields) {
     const body = new URLSearchParams({
       cpanel_jsonapi_apiversion: 2,
@@ -240,7 +312,7 @@
   }
 
   async function uapi(fn, fields, usePost = false) {
-    const body = new URLSearchParams(fields);
+    const body = fields instanceof FormData ? fields : new URLSearchParams(fields);
     const res = usePost
       ? await fetch(`${api}/${fn}`, { method: 'POST', body, credentials: 'same-origin' })
       : await fetch(`${api}/${fn}?${body}`, { credentials: 'same-origin' });

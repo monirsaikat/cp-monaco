@@ -95,7 +95,21 @@
 
   function parse(text) {
     const code = mask(text);
-    const result = { ns: '', uses: {}, classes: [], useEnd: -1, nsEnd: -1, openEnd: -1 };
+    const result = { ns: '', uses: {}, classes: [], functions: [], constants: [], useEnd: -1, nsEnd: -1, openEnd: -1 };
+
+    // Line numbers (from 1) of declarations, for go to definition and the outline.
+    const lineStarts = [0];
+    for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) lineStarts.push(i + 1);
+    const lineAt = (offset) => {
+      let low = 0;
+      let high = lineStarts.length - 1;
+      while (low < high) {
+        const mid = (low + high + 1) >> 1;
+        if (lineStarts[mid] <= offset) low = mid;
+        else high = mid - 1;
+      }
+      return low + 1;
+    };
 
     const open = /<\?(?:php\b|=)?/.exec(text);
     if (open) result.openEnd = open.index + open[0].length;
@@ -114,10 +128,32 @@
       if (name === 'extends' || name === 'implements' || /\bnew\s+$/.test(code.slice(Math.max(0, found.index - 6), found.index))) continue;
       const bodyStart = found.index + whole.length - 1;
       const bodyEnd = matchingBrace(code, bodyStart);
-      ranges.push({ kind, name, rest, bodyStart, bodyEnd });
+      ranges.push({ kind, name, rest, bodyStart, bodyEnd, index: found.index });
       header.lastIndex = bodyEnd;
     }
     const insideClass = (index) => ranges.some((r) => index > r.bodyStart && index < r.bodyEnd);
+
+    // Functions and constants declared outside classes.
+    const topFn = /\bfunction\s+&?\s*(\w+)\s*\(((?:[^()]|\([^()]*\))*)\)\s*(?::\s*(\??[\w\\|&]+))?/g;
+    while ((found = topFn.exec(code))) {
+      if (insideClass(found.index)) continue;
+      const after = found.index + found[0].length;
+      const brace = after + code.slice(after, after + 200).search(/\S/);
+      const params = found[2].replace(/\s+/g, ' ').trim();
+      result.functions.push({
+        n: found[1],
+        l: lineAt(found.index),
+        e: lineAt(code[brace] === '{' ? matchingBrace(code, brace) : after),
+        sig: params.length > 140 ? `${params.slice(0, 137)}...` : params,
+        t: found[3] || '',
+      });
+    }
+    for (const m of text.matchAll(/\bdefine\s*\(\s*(['"])(\w+)\1/g)) {
+      if (code[m.index] === 'd') result.constants.push({ n: m[2], l: lineAt(m.index) });
+    }
+    for (const m of code.matchAll(/(?:^|[;{}\s])const\s+(\w+)\s*=/g)) {
+      if (!insideClass(m.index)) result.constants.push({ n: m[1], l: lineAt(m.index + m[0].indexOf('const')) });
+    }
 
     const useRe = /(^|[;{}\s])use\s+(function\s+|const\s+)?([^;()]+);/g;
     while ((found = useRe.exec(code))) {
@@ -146,7 +182,9 @@
 
     for (const range of ranges) {
       const { kind, name, rest } = range;
-      const cls = { n: name, f: result.ns ? `${result.ns}\\${name}` : name, k: kind, x: '', i: [], t: [], m: [], r: [range.bodyStart, range.bodyEnd] };
+      const cls = { n: name, f: result.ns ? `${result.ns}\\${name}` : name, k: kind, x: '', i: [], t: [], m: [], r: [range.bodyStart, range.bodyEnd], l: lineAt(range.index), e: lineAt(range.bodyEnd) };
+      // Members are found in `flat`, which lines up with the text from here on.
+      const base = range.bodyStart + 1;
       const ext = /\bextends\s+([\w\\,\s]+?)(?=\bimplements\b|$)/.exec(rest);
       if (ext) {
         const names = ext[1].split(',').map((s) => s.trim()).filter(Boolean);
@@ -175,27 +213,32 @@
       const fnRe = /((?:(?:public|protected|private|static|abstract|final)\s+)*)function\s+&?\s*(\w+)\s*\(((?:[^()]|\([^()]*\))*)\)\s*(?::\s*(\??[\w\\|&]+))?/g;
       while ((m = fnRe.exec(flat))) {
         const params = m[3].replace(/\s+/g, ' ').trim();
-        add({ n: m[2], k: 'm', v: visibility(m[1]), s: /\bstatic\b/.test(m[1]) ? 1 : 0, sig: params.length > 140 ? `${params.slice(0, 137)}...` : params, t: m[4] ? resolve(m[4].replace(/^\?/, '')) : '' });
+        const line = lineAt(base + m.index);
+        // `flat` keeps only this method's own braces, so the next } is the one that closes it.
+        const after = m.index + m[0].length;
+        const brace = after + flat.slice(after, after + 200).search(/\S/);
+        const close = flat[brace] === '{' ? flat.indexOf('}', brace) : -1;
+        add({ n: m[2], k: 'm', v: visibility(m[1]), s: /\bstatic\b/.test(m[1]) ? 1 : 0, sig: params.length > 140 ? `${params.slice(0, 137)}...` : params, t: m[4] ? resolve(m[4].replace(/^\?/, '')) : '', l: line, e: close === -1 ? line : lineAt(base + close) });
         // Constructor promotion: `public function __construct(private Foo $bar)`.
         const promoted = /((?:(?:public|protected|private|readonly)\s+)+)(\??[\w\\|]+\s+)?\$(\w+)/g;
         let p;
         while (m[2] === '__construct' && (p = promoted.exec(params))) {
-          add({ n: p[3], k: 'p', v: visibility(p[1]), s: 0, t: p[2] ? resolve(p[2].trim().replace(/^\?/, '')) : '' });
+          add({ n: p[3], k: 'p', v: visibility(p[1]), s: 0, t: p[2] ? resolve(p[2].trim().replace(/^\?/, '')) : '', l: line });
         }
       }
 
       const constRe = /((?:(?:public|protected|private|final)\s+)*)const\s+(?:[\w\\?|]+\s+(?=\w+\s*=))?(\w+)\s*=/g;
-      while ((m = constRe.exec(flat))) add({ n: m[2], k: 'c', v: visibility(m[1]), s: 1 });
+      while ((m = constRe.exec(flat))) add({ n: m[2], k: 'c', v: visibility(m[1]), s: 1, l: lineAt(base + m.index) });
 
       const propRe = /((?:(?:public|protected|private|static|readonly|var)\s+)+)(\??[\w\\|&]+\s+)?\$(\w+)/g;
       while ((m = propRe.exec(flat))) {
         if (/^function\b/.test((m[2] || '').trim())) continue;
-        add({ n: m[3], k: 'p', v: visibility(m[1]), s: /\bstatic\b/.test(m[1]) ? 1 : 0, t: m[2] ? resolve(m[2].trim().replace(/^\?/, '')) : '' });
+        add({ n: m[3], k: 'p', v: visibility(m[1]), s: /\bstatic\b/.test(m[1]) ? 1 : 0, t: m[2] ? resolve(m[2].trim().replace(/^\?/, '')) : '', l: lineAt(base + m.index) });
       }
 
       if (kind === 'enum') {
         const caseRe = /\bcase\s+(\w+)\s*(?:=|;)/g;
-        while ((m = caseRe.exec(flat))) add({ n: m[1], k: 'e', v: 'public', s: 1 });
+        while ((m = caseRe.exec(flat))) add({ n: m[1], k: 'e', v: 'public', s: 1, l: lineAt(base + m.index) });
       }
 
       // Eloquent models: attribute names listed in $fillable / $appends / $casts act as properties.
@@ -204,7 +247,7 @@
       while ((m = attrRe.exec(original))) {
         const list = m[2];
         const names = m[1] === 'casts' ? [...list.matchAll(/['"](\w+)['"]\s*=>/g)] : m[1] === 'hidden' ? [] : [...list.matchAll(/['"](\w+)['"]/g)];
-        for (const [, attr] of names) add({ n: attr, k: 'p', v: 'public', s: 0, t: '' });
+        for (const [, attr] of names) add({ n: attr, k: 'p', v: 'public', s: 0, t: '', l: lineAt(base + m.index) });
       }
 
       result.classes.push(cls);

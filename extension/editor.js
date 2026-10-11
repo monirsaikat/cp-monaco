@@ -82,6 +82,23 @@
     indexStatus: $('index-status'),
     settingsBtn: $('settings-btn'),
     settingsDialog: $('settings-dialog'),
+    stage: $('stage'),
+    viewer: $('viewer'),
+    splitBtn: $('split-btn'),
+    previewBtn: $('preview-btn'),
+    splitResizer: $('split-resizer'),
+    side: $('side'),
+    sideName: $('side-name'),
+    sideKind: $('side-kind'),
+    sideClose: $('side-close'),
+    sideEditor: $('side-editor'),
+    sideViewer: $('side-viewer'),
+    sidePreview: $('side-preview'),
+    upload: $('upload'),
+    uploadInput: $('upload-input'),
+    uploadFolderInput: $('upload-folder-input'),
+    replaceInput: $('replace-input'),
+    replaceAll: $('replace-all'),
   };
 
   // Extensions Monaco doesn't map (or maps poorly) on its own.
@@ -102,6 +119,14 @@
     'woff woff2 ttf otf eot exe dll so bin dat db sqlite iso dmg class pyc swf'
   ).split(' '));
   const LARGE_FILE = 5 * 1024 * 1024;
+  // Pictures are shown, not edited. SVG is both: text in the editor, a picture in the preview.
+  const IMAGE_TYPES = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+    avif: 'image/avif', bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml',
+  };
+  const IMAGE_MAX = 25 * 1024 * 1024;
+  const PREVIEWABLE = /\.(md|markdown|mdown|mkd|svg)$/i;
+  const ARCHIVE = /\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2?|gz|bz2)$/i;
 
   // Quick open walks the folder tree through the same UAPI call as the explorer, so it
   // stays away from folders that are huge or never hold code, and stops at a fixed size.
@@ -114,11 +139,13 @@
   const HOME_PATTERN = /^\/home\d*\/[^/]+/;
   const INDEX_MAX_FILES = 10000;
   const INDEX_MAX_DIRS = 1500;
-  const INDEX_CONCURRENCY = 12;
+  // Browsers allow about six connections to one server. Background listing stays under that,
+  // so opening and saving files never has to queue behind it.
+  const INDEX_CONCURRENCY = 4;
   const QUICK_MAX_RESULTS = 60;
 
   // Must match PROTOCOL in content.js.
-  const PROTOCOL = 2;
+  const PROTOCOL = 3;
   const DRAFT_DELAY = 800;
   const HISTORY_MAX = 20;
   const HISTORY_DAYS = 30;
@@ -130,6 +157,10 @@
   const SEARCH_MAX_RESULTS = 2000;
   const SEARCH_MAX_PER_FILE = 200;
   const SEARCH_CACHE_CHARS = 50 * 1024 * 1024;
+  const UPLOAD_MAX_FILES = 2000;
+  // Indexing, searching and other bulk work is sent a few requests at a time, and held back
+  // while anything the user asked for is on its way (see request()).
+  const BACKGROUND_MAX = 4;
 
   const THEMES = window.CPM_THEMES;
   // Material Icon Theme tables, generated at build time (monaco/file-icons/icons.js).
@@ -149,8 +180,10 @@
   let lastState = '';
   let nextRequestId = 1;
   const pending = new Map();
+  const background = { queue: [], running: 0, urgent: 0 };
 
   // Each tab: { path, dir, file, model, charset, savedVersion, saving, viewState, shownDirty, lastUsed }
+  // A picture's tab also has `image` ({ url, size }); its model stays empty and is never saved.
   const tabs = [];
   let active = null;
   const opening = new Set();
@@ -160,14 +193,24 @@
   // dir -> { status: 'loading' | 'ok' | 'error', entries, error, promise }
   const listings = new Map();
 
-  const quick = { files: [], crawling: false, done: false, truncated: false, generation: 0, results: [], selected: 0, frame: 0, promise: null };
+  const quick = { files: [], crawling: false, done: false, truncated: false, generation: 0, results: [], selected: 0, frame: 0, promise: null, wantAll: false, resume: null, markReady: null };
 
   // The cPanel host, so drafts, history and open tabs from different servers never mix.
   let server = '';
   let sessionKey = '';
   const diff = { editor: null, temp: [] };
-  const search = { generation: 0, timer: 0, cache: new Map(), cacheChars: 0, groups: [], total: 0, collapsed: new Set(), renderTimer: 0, matchList: [] };
+  const search = { generation: 0, timer: 0, cache: new Map(), cacheChars: 0, groups: [], total: 0, collapsed: new Set(), renderTimer: 0, matchList: [], matcher: null, regex: false, limited: false };
   let lastTreeRow = null;
+  // The second pane, beside the editor: another editor on a tab's file ('editor'), a rendered
+  // preview of it ('preview') or a picture ('image').
+  const split = { tab: null, mode: '', editor: null, focused: false, timer: 0, images: new Map() };
+  // What Cut or Copy in the explorer picked up: { items: [{ path, type }], cut }.
+  let clip = null;
+  // Rows picked with Ctrl+click or Shift+click: path -> type.
+  const selected = new Map();
+  let selectAnchor = null;
+  let dragged = null;
+  let uploadDir = null;
 
   setupThemePicker();
   applyTheme();
@@ -175,6 +218,7 @@
   setupSidebar();
   setupQuickOpen();
   setupFileOps();
+  setupDragAndDrop();
   setupSearch();
   setupHistory();
   ui.wrap.setAttribute('aria-pressed', String(wrapMode() !== 'off'));
@@ -218,8 +262,29 @@
     // Emmet abbreviations (ul>li*3, .card, m10…) show up as suggestions; Tab or Enter expands them.
     applyEmmet();
 
+    // Laravel: Blade templates, and view, route and config names in PHP and Blade files.
+    window.CPM_BLADE?.register(monaco);
+    window.CPM_LARAVEL?.register(monaco, {
+      enabled: () => settings.get('laravel.enabled'),
+      files: () => indexReady().then(() => quick.files),
+      read: (dir, file) => request({ op: 'read', dir, file, charset: 'utf-8' }, { background: true }).then((result) => result.content),
+      pathOf: (model) => tabs.find((tab) => tab.model === model)?.path || '',
+    });
+
+    window.CPM_WORDPRESS?.register(monaco, {
+      mode: () => (settings.get('php.builtins.enabled') ? settings.get('wordpress.support') : 'off'),
+      files: () => indexReady().then(() => quick.files),
+    });
+
     // PHP has syntax highlighting in Monaco but no completions, so add our own.
     window.CPM_PHP?.register(monaco);
+    // Go to definition (F12, Ctrl+click) and the outline (Ctrl+Shift+O) for PHP.
+    monaco.languages.registerDefinitionProvider(['php', 'blade'], { provideDefinition });
+    monaco.editor.registerEditorOpener({ openCodeEditor: openDefinition });
+    monaco.languages.registerDocumentSymbolProvider('php', {
+      displayName: 'PHP',
+      provideDocumentSymbols: (model) => window.CPM_PHP_MEMBERS.outline(model, monaco),
+    });
     window.CPM_FORMAT?.register(monaco, setMessage, () => settings.get('php.format.phpVersion'));
 
     for (const theme of THEMES) {
@@ -244,7 +309,8 @@
     for (const lang of languages) ui.language.add(new Option(lang.label, lang.id));
 
     ui.language.addEventListener('change', () => {
-      if (active) monaco.editor.setModelLanguage(active.model, ui.language.value);
+      if (active && !active.image) monaco.editor.setModelLanguage(active.model, ui.language.value);
+      if (active) scheduleLint(active);
     });
     ui.wrap.addEventListener('click', toggleWrap);
     setupSettings();
@@ -254,6 +320,7 @@
     ui.classic.addEventListener('click', backToClassic);
     ui.overlayClassic.addEventListener('click', () => send({ type: 'classic' }));
     setupTabs();
+    setupSplit();
 
     // Drafts are written shortly after typing stops; make sure the last one lands.
     document.addEventListener('visibilitychange', () => {
@@ -317,12 +384,50 @@
     if (parentOrigin) window.parent.postMessage({ source: 'cpm', ...message }, parentOrigin);
   }
 
-  function request(message) {
+  function dispatch(message) {
     return new Promise((resolve, reject) => {
       const id = nextRequestId++;
       pending.set(id, { resolve, reject });
       send({ type: 'request', id, ...message });
     });
+  }
+
+  // Requests the user is waiting for are sent at once. Background ones wait in a queue, and
+  // their promise has promote() for when the user turns out to need the answer after all.
+  function request(message, { background: low = false } = {}) {
+    if (!low) return urgent(dispatch(message));
+    const job = { message };
+    const promise = new Promise((resolve, reject) => Object.assign(job, { resolve, reject }));
+    promise.promote = () => {
+      const at = background.queue.indexOf(job);
+      if (at === -1) return;
+      background.queue.splice(at, 1);
+      urgent(dispatch(message)).then(job.resolve, job.reject);
+    };
+    background.queue.push(job);
+    pump();
+    return promise;
+  }
+
+  function urgent(promise) {
+    background.urgent++;
+    const done = () => {
+      background.urgent--;
+      pump();
+    };
+    promise.then(done, done);
+    return promise;
+  }
+
+  function pump() {
+    while (background.queue.length && background.running < BACKGROUND_MAX && !background.urgent) {
+      const job = background.queue.shift();
+      background.running++;
+      dispatch(job.message).then(job.resolve, job.reject).finally(() => {
+        background.running--;
+        pump();
+      });
+    }
   }
 
   function onGlobalKey(event) {
@@ -340,8 +445,8 @@
     if (mod && !event.altKey) {
       const key = event.key.toLowerCase();
       return event.shiftKey
-        ? { f: openSearch, p: openCommandPalette }[key]
-        : { s: () => save(), p: openQuickOpen, b: toggleSidebar, ',': () => openSettings() }[key];
+        ? { f: openSearch, p: openCommandPalette, v: active && canPreview(active) ? togglePreview : null }[key]
+        : { s: () => save(), p: openQuickOpen, b: toggleSidebar, ',': () => openSettings(), '\\': toggleSplit }[key];
     }
     // Chrome never passes Ctrl+W, Ctrl+Tab or Ctrl+PageUp/PageDown to a page, so tab
     // shortcuts use Alt. Matched by physical key, so Option works on a Mac as well.
@@ -379,13 +484,13 @@
 
   // `base` is the file's text on the server as of the last load or save: the reference for
   // conflict checks, drafts and the "before your edits" history entry.
-  function addTab({ dir, file, content, charset }, append = false) {
+  function addTab({ dir, file, content, charset, image = null }, append = false) {
     const path = joinPath(dir, file);
     // No file URI: a tab's path can change on rename, and a model's URI can't.
-    const model = monaco.editor.createModel(content, guessLanguage(file));
+    const model = monaco.editor.createModel(content, image ? 'plaintext' : guessLanguage(file));
     applyModelOptions(model);
     const tab = {
-      path, dir, file, model, charset,
+      path, dir, file, model, charset, image,
       base: content,
       openedAt: Date.now(),
       savedVersion: model.getAlternativeVersionId(),
@@ -402,9 +507,11 @@
       refreshDirty();
       scheduleDraft(tab);
       scheduleAutoSave(tab);
+      scheduleLint(tab);
+      if (split.tab === tab && split.mode === 'preview') schedulePreview();
     });
     tabs.splice(append || !active ? tabs.length : tabs.indexOf(active) + 1, 0, tab);
-    checkDraft(tab);
+    if (!image) checkDraft(tab);
     saveSession();
     return tab;
   }
@@ -423,15 +530,19 @@
     if (/\.php$/i.test(tab.file)) {
       loadPhpDocs();
       schedulePhpIndex();
+      window.CPM_WORDPRESS?.check(tab.path);
     }
+    scheduleLint(tab);
   }
 
   function closeTab(tab) {
     const dirty = isDirty(tab);
     if (dirty && !confirm(`${tab.file} has unsaved changes. Close it and lose them?`)) return;
     clearTimeout(tab.draftTimer);
+    clearTimeout(tab.lintTimer);
     // Discarding on purpose also discards the draft, unless it's a recovered one not yet looked at.
     if (dirty && !tab.draftOffer) quiet(db.deleteDraft(fileKey(tab.path)));
+    if (split.tab === tab) closeSide(false);
     const index = tabs.indexOf(tab);
     tabs.splice(index, 1);
     saveSession();
@@ -470,6 +581,21 @@
       const tab = el && tabs.find((t) => t.path === el.dataset.path);
       if (tab && event.button === 1) closeTab(tab);
     });
+    ui.tabs.addEventListener('contextmenu', (event) => {
+      const el = event.target.closest('.tab');
+      const tab = el && tabs.find((t) => t.path === el.dataset.path);
+      if (!tab) return;
+      event.preventDefault();
+      showMenu(event.clientX, event.clientY, [
+        { label: 'Open to the side', run: () => openSide(tab) },
+        ...(canPreview(tab) ? [{ label: 'Open preview to the side', run: () => openSide(tab, 'preview') }] : []),
+        '-',
+        { label: 'Close', hint: 'Alt+W', run: () => closeTab(tab) },
+        { label: 'Close others', run: () => tabs.filter((t) => t !== tab).forEach(closeTab) },
+        '-',
+        { label: 'Copy path', run: () => copyText(tab.path) },
+      ]);
+    });
     ui.tabs.addEventListener('keydown', (event) => {
       const el = event.target.closest('.tab');
       const tab = el && tabs.find((t) => t.path === el.dataset.path);
@@ -492,7 +618,7 @@
       const dirty = isDirty(tab);
       tab.shownDirty = dirty;
       const el = document.createElement('div');
-      el.className = `tab${tab === active ? ' active' : ''}${dirty ? ' unsaved' : ''}`;
+      el.className = `tab${tab === active ? ' active' : ''}${dirty ? ' unsaved' : ''}${tab === split.tab ? ' in-side' : ''}`;
       el.dataset.path = tab.path;
       el.title = tab.path;
       el.tabIndex = tab === active ? 0 : -1;
@@ -526,11 +652,19 @@
   // The toolbar, status bar and tab strip all describe the active tab.
   function updateChrome() {
     renderTabs();
+    const text = Boolean(active) && !active.image;
     ui.empty.hidden = Boolean(active);
-    ui.language.disabled = !active;
-    ui.review.disabled = !active;
-    ui.history.disabled = !active;
+    ui.language.disabled = !text;
+    ui.review.disabled = !text;
+    ui.history.disabled = !text;
     renderNotice();
+    updateSideChrome();
+    if (active?.image) {
+      showImage(ui.viewer, active);
+    } else {
+      ui.viewer.hidden = true;
+      ui.viewer.replaceChildren();
+    }
     if (active) {
       const { file, path, model, charset } = active;
       document.title = file;
@@ -539,8 +673,8 @@
       ui.path.textContent = `‎${path}‎`;
       ui.path.title = path;
       ui.language.value = model.getLanguageId();
-      ui.charset.textContent = charset.toUpperCase();
-      ui.eol.textContent = model.getEOL() === '\r\n' ? 'CRLF' : 'LF';
+      ui.charset.textContent = text ? charset.toUpperCase() : '';
+      ui.eol.textContent = !text ? '' : model.getEOL() === '\r\n' ? 'CRLF' : 'LF';
     } else {
       document.title = 'Monaco Editor';
       ui.name.textContent = 'No file open';
@@ -561,7 +695,7 @@
   function refreshDirty() {
     if (tabs.some((tab) => isDirty(tab) !== tab.shownDirty)) renderTabs();
     ui.dirty.hidden = !active || !isDirty(active);
-    ui.save.disabled = !active || active.saving;
+    ui.save.disabled = !active || active.saving || Boolean(active.image);
     const busy = Boolean(active?.saving);
     ui.save.classList.toggle('busy', busy);
     ui.save.setAttribute('aria-busy', String(busy));
@@ -581,6 +715,7 @@
   function guessLanguage(file) {
     const lower = file.toLowerCase();
     const ext = extensionOf(lower);
+    if (lower.endsWith('.blade.php')) return 'blade';
     if (lower.startsWith('.env')) return 'ini';
     if (LANGUAGE_OVERRIDES[ext]) return LANGUAGE_OVERRIDES[ext];
 
@@ -593,9 +728,9 @@
 
   // Resolves to true once the file is on the server. Unless `force` is set, it first checks
   // that nobody changed the file since it was opened, and shows the differences if they did.
-  async function save({ force = false, auto = false } = {}) {
-    const tab = active;
-    if (!tab || tab.saving) return false;
+  // With the editor split, it saves the file in the pane that was used last.
+  async function save({ force = false, auto = false, tab = focusedTab() } = {}) {
+    if (!tab || tab.saving || tab.image) return false;
     tab.saving = true;
     refreshDirty();
     setMessage(`Saving ${tab.file}…`);
@@ -622,6 +757,7 @@
       tab.savedVersion = version;
       updateSearchCache(tab.path, content);
       if (phpIndex.promise && /\.php$/i.test(tab.file)) window.CPM_PHP_INDEX.update(tab.path, content);
+      window.CPM_LARAVEL?.changed(tab.path);
       recordHistory(tab, before, content);
       if (!isDirty(tab) && !tab.draftOffer) {
         clearTimeout(tab.draftTimer);
@@ -659,33 +795,86 @@
 
   // ---- Opening files ----
 
-  async function openFile(dir, file, { size = 0, line = 0, column = 1, length = 0 } = {}) {
+  async function openFile(dir, file, { size = 0, line = 0, column = 1, length = 0, word = '', side = false } = {}) {
     const path = joinPath(dir, file);
+    // "Open to the side" puts the file in the second pane and leaves the main one alone.
+    const show = (tab) => {
+      if (side && active) return openSide(tab);
+      if (tab !== active) activate(tab);
+      // `word` is a name to select on that line (a declaration), wherever in the line it is.
+      const at = line && word ? tab.model.getLineContent(Math.min(line, tab.model.getLineCount())).indexOf(word) : -1;
+      if (at === -1) goToLine(line, column, length);
+      else goToLine(line, at + 1, word.length);
+    };
     const open = tabs.find((t) => t.path === path);
-    if (open) {
-      if (open !== active) activate(open);
-      goToLine(line, column, length);
-      return;
-    }
-    if (BINARY_EXTENSIONS.has(extensionOf(file.toLowerCase()))) {
+    if (open) return show(open);
+    const image = isImage(file);
+    if (!image && BINARY_EXTENSIONS.has(extensionOf(file.toLowerCase()))) {
       setMessage(`${file} is a binary file, so it can't be edited as text.`, 'error');
       return;
     }
-    if (size > LARGE_FILE && !confirm(`${file} is ${formatSize(size)}. Very large files can make the editor slow. Open it anyway?`)) return;
+    if (image && size > IMAGE_MAX) {
+      setMessage(`${file} is ${formatSize(size)}, which is too large to preview.`, 'error');
+      return;
+    }
+    if (!image && size > LARGE_FILE && !confirm(`${file} is ${formatSize(size)}. Very large files can make the editor slow. Open it anyway?`)) return;
     if (opening.has(path)) return;
 
     opening.add(path);
     setMessage(`Opening ${file}…`);
     try {
-      const { content, charset } = await request({ op: 'read', dir, file });
-      activate(tabs.find((t) => t.path === path) || addTab({ dir, file, content, charset }));
+      const data = image
+        ? { content: '', charset: 'utf-8', image: await loadImage(dir, file) }
+        : await request({ op: 'read', dir, file });
+      show(tabs.find((t) => t.path === path) || addTab({ dir, file, ...data }));
       setMessage('');
-      goToLine(line, column, length);
     } catch (err) {
       setMessage(`Couldn't open ${file}: ${err.message}`, 'error');
     } finally {
       opening.delete(path);
     }
+  }
+
+  function isImage(file) {
+    const ext = extensionOf(file.toLowerCase());
+    return ext !== 'svg' && Boolean(IMAGE_TYPES[ext]);
+  }
+
+  // This page may only show pictures that are part of the extension or data: URLs, so the
+  // bytes are fetched by content.js (from your cPanel) and inlined.
+  async function loadImage(dir, file) {
+    const { blob } = await request({ op: 'blob', dir, file });
+    const type = IMAGE_TYPES[extensionOf(file.toLowerCase())];
+    const url = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(new Blob([blob], { type }));
+    });
+    return { url, size: blob.size };
+  }
+
+  function showImage(container, tab) {
+    const img = document.createElement('img');
+    img.alt = tab.file;
+    img.draggable = false;
+    const info = document.createElement('p');
+    info.textContent = formatSize(tab.image.size);
+    img.addEventListener('load', () => {
+      info.textContent = `${img.naturalWidth} × ${img.naturalHeight} px · ${formatSize(tab.image.size)}`;
+    });
+    img.addEventListener('error', () => {
+      info.textContent = 'This picture couldn’t be displayed. Your session may have expired.';
+    });
+    // A click switches between fitting the pane and the picture's real size.
+    img.addEventListener('click', () => container.classList.toggle('actual'));
+    img.src = tab.image.url;
+    const frame = document.createElement('div');
+    frame.className = 'viewer-frame';
+    frame.append(img);
+    container.classList.remove('actual');
+    container.replaceChildren(frame, info);
+    container.hidden = false;
   }
 
   function goToLine(line, column = 1, length = 0) {
@@ -739,6 +928,12 @@
     ui.tree.addEventListener('click', (event) => {
       const row = event.target.closest('.row');
       if (!row) return;
+      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+        selectRow(row, event.shiftKey);
+        return;
+      }
+      clearSelection();
+      selectAnchor = row.dataset.path;
       if (row.dataset.type === 'dir') toggleDir(row.dataset.path);
       else openFile(row.dataset.dir, row.dataset.name, { size: Number(row.dataset.size) });
     });
@@ -756,29 +951,33 @@
       ui.sidebar.style.width = `${prefs.sidebarWidth}px`;
     };
     ui.resizer.tabIndex = 0;
-    ui.resizer.addEventListener('pointerdown', (event) => {
-      event.preventDefault();
-      ui.resizer.setPointerCapture(event.pointerId);
-      ui.resizer.classList.add('dragging');
-      const left = ui.sidebar.getBoundingClientRect().left;
-      const move = (e) => resize(e.clientX - left);
-      const stop = () => {
-        ui.resizer.classList.remove('dragging');
-        ui.resizer.removeEventListener('pointermove', move);
-        ui.resizer.removeEventListener('pointerup', stop);
-        ui.resizer.removeEventListener('pointercancel', stop);
-        savePrefs();
-      };
-      ui.resizer.addEventListener('pointermove', move);
-      ui.resizer.addEventListener('pointerup', stop);
-      ui.resizer.addEventListener('pointercancel', stop);
-    });
+    onDrag(ui.resizer, (x) => resize(x - ui.sidebar.getBoundingClientRect().left), savePrefs);
     ui.resizer.addEventListener('keydown', (event) => {
       const step = { ArrowLeft: -16, ArrowRight: 16 }[event.key];
       if (!step) return;
       event.preventDefault();
       resize(prefs.sidebarWidth + step);
       savePrefs();
+    });
+  }
+
+  // Calls `move` with the pointer's x position while a divider is dragged, then `done`.
+  function onDrag(handle, move, done) {
+    handle.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      handle.setPointerCapture(event.pointerId);
+      handle.classList.add('dragging');
+      const drag = (e) => move(e.clientX);
+      const stop = () => {
+        handle.classList.remove('dragging');
+        handle.removeEventListener('pointermove', drag);
+        handle.removeEventListener('pointerup', stop);
+        handle.removeEventListener('pointercancel', stop);
+        done();
+      };
+      handle.addEventListener('pointermove', drag);
+      handle.addEventListener('pointerup', stop);
+      handle.addEventListener('pointercancel', stop);
     });
   }
 
@@ -797,18 +996,22 @@
     ui.sidebarToggle.setAttribute('aria-pressed', String(prefs.sidebar));
   }
 
-  function listDir(dir) {
+  function listDir(dir, low = false) {
     let listing = listings.get(dir);
     if (!listing) {
       listing = { status: 'loading', entries: [], error: '' };
       listings.set(dir, listing);
-      fetchListing(dir, listing);
+      fetchListing(dir, listing, low);
+    } else if (!low) {
+      // The explorer needs a folder that indexing had only queued: send it now.
+      listing.sent?.promote?.();
     }
     return listing.promise;
   }
 
-  function fetchListing(dir, listing) {
-    listing.promise = request({ op: 'list', dir }).then((entries) => {
+  function fetchListing(dir, listing, low = false) {
+    listing.sent = request({ op: 'list', dir }, { background: low });
+    listing.promise = listing.sent.then((entries) => {
       entries.sort((a, b) =>
         (a.type === b.type ? 0 : a.type === 'dir' ? -1 : 1) || collator.compare(a.name, b.name));
       const changed = listing.stale && !sameEntries(listing.entries, entries);
@@ -936,8 +1139,9 @@
 
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = `row${active?.path === path ? ' active' : ''}`;
+      row.className = `row${active?.path === path ? ' active' : ''}${selected.has(path) ? ' selected' : ''}${clip?.cut && clip.items.some((item) => item.path === path) ? ' cut' : ''}`;
       row.tabIndex = -1;
+      row.draggable = true;
       row.title = path;
       row.style.paddingLeft = `${8 + depth * 12}px`;
       Object.assign(row.dataset, { path, dir, name: entry.name, type: entry.type, size: entry.size });
@@ -984,6 +1188,17 @@
     const { path, type } = row.dataset;
     const open = row.getAttribute('aria-expanded') === 'true';
     let target = null;
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey) {
+      const run = {
+        c: () => setClip(selectionFor(path, type), false),
+        x: () => setClip(selectionFor(path, type), true),
+        v: () => pasteEntry(type === 'dir' ? path : row.dataset.dir),
+      }[event.key.toLowerCase()];
+      if (!run) return;
+      event.preventDefault();
+      run();
+      return;
+    }
     switch (event.key) {
       case 'ArrowDown': target = rows[index + 1]; break;
       case 'ArrowUp': target = rows[index - 1]; break;
@@ -1001,7 +1216,11 @@
         renameEntry(path, type);
         break;
       case 'Delete':
-        trashEntry(path, type);
+        trashEntries(selectionFor(path, type));
+        break;
+      case 'Escape':
+        if (!selected.size) return;
+        clearSelection();
         break;
       case 'F10':
         if (!event.shiftKey) return;
@@ -1015,6 +1234,42 @@
     }
     event.preventDefault();
     target?.focus();
+  }
+
+  // Ctrl+click adds or removes a row; Shift+click selects from the row clicked before to this one.
+  function selectRow(row, range) {
+    const rows = [...ui.tree.querySelectorAll('.row')];
+    const { path, type } = row.dataset;
+    const anchor = selectAnchor ? rows.find((r) => r.dataset.path === selectAnchor) : null;
+    if (range && anchor) {
+      const from = rows.indexOf(anchor);
+      const to = rows.indexOf(row);
+      selected.clear();
+      for (const r of rows.slice(Math.min(from, to), Math.max(from, to) + 1)) selected.set(r.dataset.path, r.dataset.type);
+    } else {
+      if (selected.has(path)) selected.delete(path);
+      else selected.set(path, type);
+      selectAnchor = path;
+    }
+    paintSelection();
+  }
+
+  function paintSelection() {
+    for (const row of ui.tree.querySelectorAll('.row')) row.classList.toggle('selected', selected.has(row.dataset.path));
+  }
+
+  function clearSelection() {
+    if (!selected.size) return;
+    selected.clear();
+    paintSelection();
+  }
+
+  // What an action on a row applies to: the whole selection when the row is part of one,
+  // without anything that sits inside a folder that is selected too.
+  function selectionFor(path, type) {
+    if (selected.size < 2 || !selected.has(path)) return [{ path, type }];
+    const items = [...selected].map(([p, t]) => ({ path: p, type: t }));
+    return items.filter((item) => !items.some((other) => isInside(item.path, other.path)));
   }
 
   function markActiveRow() {
@@ -1087,6 +1342,7 @@
     quick.selected = 0;
     updateQuickResults();
     ui.quickInput.focus();
+    wantAllFiles();
     buildIndex();
   }
 
@@ -1101,14 +1357,24 @@
     if (!result) return;
     const { line } = parseQuery();
     closeQuickOpen();
-    openFile(result.dir, result.file, { size: result.size, line });
+    openFile(result.dir, result.file, { size: result.size, line: result.line || line, word: result.word });
   }
 
   function resetIndex() {
     quick.generation++;
     quick.files = [];
     quick.crawling = quick.done = quick.truncated = quick.refreshing = false;
-    quick.promise = quick.ready = null;
+    quick.promise = quick.ready = quick.markReady = null;
+    // Lets a paused walk notice that it's out of date and stop.
+    quick.resume?.();
+    quick.resume = null;
+  }
+
+  // Go to file and Find in files need every folder, not just the open file's project.
+  function wantAllFiles() {
+    quick.wantAll = true;
+    quick.resume?.();
+    quick.resume = null;
   }
 
   // After the folder structure changed (create, rename, delete) the saved list is out of date:
@@ -1132,6 +1398,7 @@
       const generation = quick.generation;
       let ready;
       quick.ready = new Promise((resolve) => { ready = resolve; });
+      quick.markReady = ready;
       quick.promise = (async () => {
         try {
           const age = await loadIndexCache();
@@ -1204,6 +1471,17 @@
     const first = projectFolder(root);
     if (first) await walk([first], new Set(), generation, root, state);
     if (generation !== quick.generation) return;
+    if (first && !state.full && !quick.wantAll) {
+      // The open file's project is all that completion needs. The rest of the account is only
+      // listed once Go to file or Find in files asks for it, which spares an account with many
+      // files hundreds of requests on every visit.
+      const project = state.files.slice();
+      if (refreshing) quick.files = [...project, ...quick.files.filter((item) => !isInside(joinPath(item.dir, item.file), first))];
+      quick.markReady?.();
+      await new Promise((resolve) => { quick.resume = resolve; });
+      if (generation !== quick.generation) return;
+      if (refreshing) state.files = project;
+    }
     if (!state.full) await walk([root], new Set(first ? [first] : []), generation, root, state);
     if (generation !== quick.generation) return;
 
@@ -1230,7 +1508,7 @@
       for (let i = 0; i < level.length; i += INDEX_CONCURRENCY) {
         const batch = level.slice(i, i + INDEX_CONCURRENCY);
         const listed = await Promise.all(batch.map((dir) =>
-          listDir(dir).then((entries) => [dir, entries], () => [dir, []])));
+          listDir(dir, true).then((entries) => [dir, entries], () => [dir, []])));
         if (generation !== quick.generation) return;
 
         for (const [dir, entries] of listed) {
@@ -1272,7 +1550,40 @@
       : { text: raw.toLowerCase(), line: 0 };
   }
 
+  // "#name" in Go to file lists the project's classes, methods and functions instead of files.
+  function updateSymbolResults(query) {
+    if (settings.get('php.index.enabled')) ensurePhpIndex();
+    const index = window.CPM_PHP_INDEX;
+    const scored = [];
+    for (const symbol of index.symbols()) {
+      const match = query ? fuzzyMatch(query, symbol.name) : { score: 0, positions: [] };
+      if (match) scored.push({ symbol, ...match });
+    }
+    scored.sort((a, b) => b.score - a.score || a.symbol.name.length - b.symbol.name.length);
+    quick.results = scored.slice(0, QUICK_MAX_RESULTS).map(({ symbol, positions }) => ({
+      dir: parentOf(symbol.file),
+      file: baseName(symbol.file),
+      size: 0,
+      label: symbol.name,
+      detail: `${symbol.kind} · ${relativePath(symbol.file, rootDir)}`,
+      line: symbol.line,
+      word: symbol.word || symbol.name,
+      name: positions,
+      where: [],
+    }));
+    quick.selected = Math.min(quick.selected, Math.max(quick.results.length - 1, 0));
+    renderQuickResults();
+    ui.quickStatus.textContent = quick.results.length
+      ? ''
+      : index.size ? 'No matching classes or functions.' : 'No PHP classes or functions are indexed yet. Open a PHP file of the project first.';
+  }
+
   function updateQuickResults() {
+    const typed = ui.quickInput.value.trim();
+    if (typed.startsWith('#')) {
+      updateSymbolResults(typed.slice(1).replace(/\s+/g, '').toLowerCase());
+      return;
+    }
     const { text } = parseQuery();
     if (!text) {
       // Nothing typed yet: offer the other open files, most recently used first.
@@ -1311,10 +1622,10 @@
       item.dataset.index = index;
       item.setAttribute('role', 'option');
       item.setAttribute('aria-selected', String(index === quick.selected));
-      const where = parentOf(result.rel) === '/' || !result.rel.includes('/') ? '' : parentOf(result.rel);
+      const where = result.detail ?? (parentOf(result.rel) === '/' || !result.rel.includes('/') ? '' : parentOf(result.rel));
       item.append(
         fileIcon(result.file),
-        highlight(result.file, result.name, 'q-name'),
+        highlight(result.label ?? result.file, result.name, 'q-name'),
         highlight(where, result.where, 'q-dir'),
       );
       return item;
@@ -1447,7 +1758,7 @@
     const enabled = settings.get('emmet.enabled');
     if (enabled && !emmet.disposers.length && window.emmetMonaco) {
       emmet.disposers = [
-        emmetMonaco.emmetHTML(monaco, ['html', 'php', 'twig', 'handlebars']),
+        emmetMonaco.emmetHTML(monaco, ['html', 'php', 'blade', 'twig', 'handlebars']),
         emmetMonaco.emmetCSS(monaco, ['css', 'scss', 'less']),
       ];
     } else if (!enabled && emmet.disposers.length) {
@@ -1465,6 +1776,7 @@
     }
     if (!editor) return;
     editor.updateOptions(monacoOptions());
+    split.editor?.updateOptions(monacoOptions());
     if (changed('editor.tabSize', 'editor.insertSpaces', 'editor.detectIndentation')) {
       for (const tab of tabs) applyModelOptions(tab.model);
     }
@@ -1483,6 +1795,8 @@
       if (settings.get('php.builtins.enabled') && active && /\.php$/i.test(active.file)) loadPhpDocs();
     }
     if (changed('php.index.enabled') && active && /\.php$/i.test(active.file)) schedulePhpIndex();
+    if (changed('php.validate.enabled')) for (const tab of tabs) scheduleLint(tab);
+    if (changed('wordpress.support', 'php.builtins.enabled') && active && /\.php$/i.test(active.file)) window.CPM_WORDPRESS?.check(active.path);
     if (changed('files.autoSave')) for (const tab of tabs) scheduleAutoSave(tab);
   }
 
@@ -1494,7 +1808,7 @@
     if (settings.get('files.autoSave') !== 'afterDelay' || !isDirty(tab)) return;
     tab.autoSaveTimer = setTimeout(() => {
       tab.autoSaveTimer = 0;
-      if (tab === active && isDirty(tab) && !tab.saving) save({ auto: true });
+      if ((tab === active || tab === split.tab) && isDirty(tab) && !tab.saving) save({ auto: true, tab });
       else if (isDirty(tab) && tab !== active) tab.autoSavePending = true;
     }, settings.get('files.autoSaveDelay'));
   }
@@ -1506,11 +1820,13 @@
 
   // Format on save, trimming and the final newline all happen in the editor before the text is read.
   async function prepareForSave(tab, auto) {
-    if (tab !== active || tab.model.isDisposed()) return;
+    // Formatting needs an editor that is showing the file.
+    const host = tab === active ? editor : tab === split.tab && split.mode === 'editor' ? split.editor : null;
+    if (!host || tab.model.isDisposed()) return;
     const model = tab.model;
     const delayed = auto && settings.get('files.autoSave') === 'afterDelay';
     if (settings.get('editor.formatOnSave') && !delayed) {
-      const action = editor.getAction('editor.action.formatDocument');
+      const action = host.getAction('editor.action.formatDocument');
       if (action && action.isSupported()) {
         await Promise.race([action.run(), new Promise((resolve) => setTimeout(resolve, 25000))]);
       }
@@ -1560,6 +1876,82 @@
     });
   }
 
+  // ---- PHP syntax check ----
+
+  // Runs shortly after typing stops, in the formatter's worker, and underlines the first
+  // syntax error the parser finds.
+  function scheduleLint(tab) {
+    clearTimeout(tab.lintTimer);
+    tab.lintTimer = 0;
+    if (tab.image || tab.model.isDisposed()) return;
+    if (!settings.get('php.validate.enabled') || tab.model.getLanguageId() !== 'php' || !window.CPM_FORMAT?.check) {
+      monaco.editor.setModelMarkers(tab.model, 'cpm-php', []);
+      return;
+    }
+    // Only files on screen are checked; the others are when you switch to them.
+    if (tab !== active && tab !== split.tab) return;
+    tab.lintTimer = setTimeout(() => lint(tab), 700);
+  }
+
+  async function lint(tab) {
+    tab.lintTimer = 0;
+    const model = tab.model;
+    if (model.isDisposed()) return;
+    const version = model.getVersionId();
+    const result = await window.CPM_FORMAT.check(model.getValue());
+    if (model.isDisposed() || model.getVersionId() !== version) return;
+    const markers = [];
+    if (!result.ok && result.line) {
+      const line = Math.min(result.line, model.getLineCount());
+      const text = model.getLineContent(line);
+      // From the unexpected token to the end of the line, or the whole line when it's at the end.
+      const column = (result.column || 0) < text.length ? (result.column || 0) + 1 : Math.max(text.search(/\S/), 0) + 1;
+      markers.push({
+        severity: monaco.MarkerSeverity.Error,
+        source: 'PHP',
+        message: result.message,
+        startLineNumber: line,
+        startColumn: column,
+        endLineNumber: line,
+        endColumn: Math.max(text.length + 1, column + 1),
+      });
+    }
+    monaco.editor.setModelMarkers(model, 'cpm-php', markers);
+  }
+
+  // ---- Go to definition ----
+
+  const definitionModels = new Map();
+
+  function provideDefinition(model, position) {
+    const target = window.CPM_PHP_MEMBERS?.definition(model, position);
+    if (!target) return null;
+    const own = tabs.find((tab) => tab.model === model);
+    if (!target.path || target.path === own?.path) {
+      const line = Math.min(target.line, model.getLineCount());
+      const at = target.word ? model.getLineContent(line).indexOf(target.word) : -1;
+      const column = at === -1 ? 1 : at + 1;
+      return { uri: model.uri, range: new monaco.Range(line, column, line, column + (at === -1 ? 0 : target.word.length)) };
+    }
+    // Monaco needs a document to point at, and the file isn't loaded until you go there. This
+    // one-line stand-in says where the declaration is, and carries the line for openDefinition.
+    const uri = monaco.Uri.from({ scheme: 'cpm', path: target.path, query: `${target.line}:${target.word || ''}` });
+    const key = uri.toString();
+    if (!definitionModels.has(key)) {
+      const label = `${target.word || baseName(target.path)}  —  ${relativePath(target.path, rootDir)}:${target.line}`;
+      definitionModels.set(key, monaco.editor.createModel(label, 'plaintext', uri));
+    }
+    return { uri, range: new monaco.Range(1, 1, 1, 1) };
+  }
+
+  // Monaco calls this to open a definition that is in another file.
+  function openDefinition(source, resource) {
+    if (resource.scheme !== 'cpm') return false;
+    const [line, word] = resource.query.split(':');
+    openFile(parentOf(resource.path), baseName(resource.path), { line: Number(line) || 1, word });
+    return true;
+  }
+
   // ---- PHP project index (completion across files) ----
 
   const phpIndex = { key: '', promise: null, timer: 0 };
@@ -1598,7 +1990,7 @@
     const index = window.CPM_PHP_INDEX;
     phpIndex.promise = (async () => {
       try {
-        const saved = await db.getCache(`php|${key}`).catch(() => null);
+        const saved = await db.getCache(`php2|${key}`).catch(() => null);
         if (saved) index.restore(saved.rows);
         setIndexStatus('Scanning project…');
         await indexReady();
@@ -1606,9 +1998,13 @@
           .filter((item) => (item.dir === project || item.dir.startsWith(`${project}/`)) && /\.php$/i.test(item.file))
           .map((item) => ({ path: joinPath(item.dir, item.file), size: item.size, mtime: item.mtime || 0 }));
         await index.build(candidates, {
-          read: (path) => request({ op: 'read', dir: parentOf(path), file: baseName(path), charset: 'utf-8' }),
-          onProgress: (done, total) => setIndexStatus(`Indexing PHP classes… ${done}/${total}`),
-          onSave: () => quiet(db.putCache(`php|${key}`, { t: Date.now(), rows: index.serialize() })),
+          read: (path) => request({ op: 'read', dir: parentOf(path), file: baseName(path), charset: 'utf-8' }, { background: true }),
+          onProgress: (done, total) => {
+            setIndexStatus(`Indexing PHP classes… ${done}/${total}`);
+            scheduleQuickUpdate();
+          },
+          // "php2": entries also hold line numbers, functions and constants since 2.0.
+          onSave: () => quiet(db.putCache(`php2|${key}`, { t: Date.now(), rows: index.serialize() })),
         });
       } catch {
         // Completion simply stays limited to the open file.
@@ -1820,9 +2216,8 @@
   // ---- Diff view: review, conflicts, drafts and history all use it ----
 
   // `original` is text; `modified` is either text (shown read-only) or a tab's live model.
-  function openDiff({ title, legend, original, modified, readOnly = false, actions }) {
+  function openDiff({ title, legend, original, modified, readOnly = false, language = active?.model.getLanguageId() || 'plaintext', actions }) {
     closeDiff(false);
-    const language = active?.model.getLanguageId() || 'plaintext';
     if (!diff.editor) {
       diff.editor = monaco.editor.createDiffEditor(ui.diffEditor, {
         automaticLayout: true,
@@ -1879,13 +2274,15 @@
       original: current,
       modified: tab.model,
       actions: [
-        { label: 'Save', primary: true, run: async () => { if (await save()) closeDiff(); } },
+        { label: 'Save', primary: true, run: async () => { if (await save({ tab })) closeDiff(); } },
         { label: 'Close', run: () => closeDiff() },
       ],
     });
   }
 
   function showConflict(tab, current) {
+    // The comparison is shown in the main pane.
+    if (tab !== active) activate(tab);
     setMessage(`Not saved: ${tab.file} was changed on the server after you opened it.`, 'error');
     openDiff({
       title: `${tab.file} changed on the server`,
@@ -1893,7 +2290,7 @@
       original: current,
       modified: tab.model,
       actions: [
-        { label: 'Overwrite server version', danger: true, run: async () => { if (await save({ force: true })) closeDiff(); } },
+        { label: 'Overwrite server version', danger: true, run: async () => { if (await save({ force: true, tab })) closeDiff(); } },
         {
           label: 'Use server version',
           run: () => {
@@ -2054,7 +2451,10 @@
     const loaded = await Promise.all(paths.map((path) => {
       const dir = parentOf(path);
       const file = baseName(path);
-      return request({ op: 'read', dir, file }).then(({ content, charset }) => ({ dir, file, content, charset }), () => null);
+      const loading = isImage(file)
+        ? loadImage(dir, file).then((image) => ({ content: '', charset: 'utf-8', image }))
+        : request({ op: 'read', dir, file });
+      return loading.then((data) => ({ dir, file, ...data }), () => null);
     }));
     for (const data of loaded) {
       if (data && !tabs.some((tab) => tab.path === joinPath(data.dir, data.file))) addTab(data, true);
@@ -2073,9 +2473,18 @@
   function setupFileOps() {
     ui.newFile.addEventListener('click', () => createEntry('file', targetDir()));
     ui.newFolder.addEventListener('click', () => createEntry('dir', targetDir()));
+    ui.upload.addEventListener('click', () => pickUpload(targetDir()));
+    for (const input of [ui.uploadInput, ui.uploadFolderInput]) {
+      input.addEventListener('change', () => {
+        // A picked folder's files say where in it they were: "photos/2024/a.jpg".
+        const items = [...input.files].map((file) => ({ file, sub: parentOf(`/${file.webkitRelativePath || file.name}`).slice(1) }));
+        uploadItems(items, uploadDir);
+      });
+    }
     ui.tree.addEventListener('contextmenu', (event) => {
       event.preventDefault();
       const row = event.target.closest('.row');
+      if (!row || !selected.has(row.dataset.path)) clearSelection();
       row?.focus();
       showMenu(event.clientX, event.clientY, menuItems(row));
     });
@@ -2103,23 +2512,53 @@
   }
 
   function menuItems(row) {
-    if (!row) {
+    const pasteLabel = () => (clip.items.length === 1 ? baseName(clip.items[0].path) : `${clip.items.length} items`);
+    const paste = (dir) => (clip ? [{ label: `Paste ${pasteLabel()}`, hint: 'Ctrl+V', run: () => pasteEntry(dir) }] : []);
+    const create = (dir) => [
+      { label: 'New file…', run: () => createEntry('file', dir) },
+      { label: 'New folder…', run: () => createEntry('dir', dir) },
+      { label: 'Upload files…', run: () => pickUpload(dir) },
+      { label: 'Upload folder…', run: () => pickUpload(dir, true) },
+    ];
+    if (!row) return [...create(rootDir), ...paste(rootDir), '-', { label: 'Refresh', run: refreshTree }];
+
+    const { path, type, dir, name, size } = row.dataset;
+    const isFile = type === 'file';
+    const inside = isFile ? dir : path;
+    const items = selectionFor(path, type);
+    if (items.length > 1) {
+      const count = `${items.length} items`;
       return [
-        { label: 'New file…', run: () => createEntry('file', rootDir) },
-        { label: 'New folder…', run: () => createEntry('dir', rootDir) },
+        { label: `Cut ${count}`, hint: 'Ctrl+X', run: () => setClip(items, true) },
+        { label: `Copy ${count}`, hint: 'Ctrl+C', run: () => setClip(items, false) },
         '-',
-        { label: 'Refresh', run: refreshTree },
+        { label: `Compress ${count}…`, run: () => compressEntries(items) },
+        { label: `Move ${count} to trash`, hint: 'Del', danger: true, run: () => trashEntries(items) },
+        '-',
+        { label: 'Copy paths', run: () => copyText(items.map((item) => item.path).join('\n')) },
+        { label: 'Clear selection', hint: 'Esc', run: clearSelection },
       ];
     }
-    const { path, type, dir, name, size } = row.dataset;
-    const inside = type === 'dir' ? path : dir;
     return [
-      ...(type === 'file' ? [{ label: 'Open', run: () => openFile(dir, name, { size: Number(size) }) }, '-'] : []),
-      { label: 'New file…', run: () => createEntry('file', inside) },
-      { label: 'New folder…', run: () => createEntry('dir', inside) },
+      ...(isFile ? [
+        { label: 'Open', run: () => openFile(dir, name, { size: Number(size) }) },
+        { label: 'Open to the side', run: () => openFile(dir, name, { size: Number(size), side: true }) },
+        '-',
+      ] : []),
+      ...create(inside),
+      '-',
+      { label: 'Cut', hint: 'Ctrl+X', run: () => setClip(items, true) },
+      { label: 'Copy', hint: 'Ctrl+C', run: () => setClip(items, false) },
+      ...paste(inside),
+      { label: 'Duplicate…', run: () => copyEntry(path, type, dir) },
       '-',
       { label: 'Rename…', hint: 'F2', run: () => renameEntry(path, type) },
-      { label: 'Move to trash', hint: 'Del', danger: true, run: () => trashEntry(path, type) },
+      { label: 'Permissions…', run: () => chmodEntry(path, type) },
+      { label: 'Move to trash', hint: 'Del', danger: true, run: () => trashEntries(items) },
+      '-',
+      ...(isFile ? [{ label: 'Download', run: () => downloadEntry(dir, name) }] : []),
+      { label: 'Compress…', run: () => compressEntries(items) },
+      ...(isFile && ARCHIVE.test(name) ? [{ label: 'Extract here…', run: () => extractEntry(path) }] : []),
       '-',
       { label: 'Copy path', run: () => copyText(path) },
     ];
@@ -2225,7 +2664,13 @@
       setMessage(`Couldn't rename ${old}: ${err.message}`, 'error');
       return;
     }
-    const target = joinPath(dir, name);
+    relocate(path, joinPath(dir, name), type);
+    refreshDir(dir);
+    setMessage(`Renamed ${old} to ${name}.`, 'ok');
+  }
+
+  // After a rename or a move: points open tabs, expanded folders and caches at the new path.
+  function relocate(path, target, type) {
     const moved = (p) => p === path || isInside(p, path);
     const movedPath = (p) => target + p.slice(path.length);
     for (const tab of tabs.filter((t) => moved(t.path))) {
@@ -2234,7 +2679,7 @@
       tab.path = movedPath(tab.path);
       tab.dir = parentOf(tab.path);
       tab.file = baseName(tab.path);
-      if (type === 'file') monaco.editor.setModelLanguage(tab.model, guessLanguage(tab.file));
+      if (type === 'file' && !tab.image) monaco.editor.setModelLanguage(tab.model, guessLanguage(tab.file));
       if (isDirty(tab)) scheduleDraft(tab);
     }
     for (const p of [...expanded].filter(moved)) {
@@ -2243,44 +2688,422 @@
     }
     for (const p of [...listings.keys()].filter(moved)) listings.delete(p);
     if (lastTreeRow && moved(lastTreeRow.path)) lastTreeRow = null;
+    if (clip?.items.some((item) => moved(item.path))) clip = null;
     dropSearchCache(path);
-    refreshDir(dir);
     updateChrome();
     saveSession();
-    setMessage(`Renamed ${old} to ${name}.`, 'ok');
   }
 
-  async function trashEntry(path, type) {
+  // ---- Copy, move, permissions, archives ----
+
+  function setClip(items, cut) {
+    clip = { items, cut };
+    renderTree();
+    const what = items.length === 1 ? baseName(items[0].path) : `${items.length} items`;
+    setMessage(`${cut ? 'Cut' : 'Copied'} ${what}. Paste into a folder with Ctrl+V or the right-click menu.`);
+  }
+
+  async function pasteEntry(destDir) {
+    if (!clip) return;
+    const { items, cut } = clip;
+    if (cut) {
+      clip = null;
+      await moveEntries(items, destDir);
+    } else {
+      // One after another: a copy whose name is taken stops to ask for a new one.
+      for (const item of items) await copyEntry(item.path, item.type, destDir);
+      clearSelection();
+    }
+  }
+
+  // "logo.png" becomes "logo-copy.png", then "logo-copy2.png".
+  function copyName(name, type, entries) {
+    const dot = type === 'file' ? name.lastIndexOf('.') : -1;
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    for (let n = 1; ; n++) {
+      const candidate = `${stem}-copy${n > 1 ? n : ''}${ext}`;
+      if (!entries.some((entry) => entry.name === candidate)) return candidate;
+    }
+  }
+
+  async function copyEntry(path, type, destDir) {
+    const name = baseName(path);
+    if (destDir === path || isInside(destDir, path)) {
+      setMessage('A folder can’t be copied into itself.', 'error');
+      return;
+    }
+    const entries = await listDir(destDir).catch(() => []);
+    let newName = name;
+    // A copy next to the original, or where the name is taken, needs a name of its own.
+    if (entries.some((entry) => entry.name === name)) {
+      const suggestion = copyName(name, type, entries);
+      const dot = type === 'file' ? suggestion.lastIndexOf('.') : -1;
+      newName = await ask({
+        title: `Copy ${name}`,
+        text: `Into ${destDir}`,
+        value: suggestion,
+        select: dot > 0 ? [0, dot] : null,
+        confirm: 'Copy',
+        validate: (value) => validateName(value, destDir),
+      });
+      if (!newName) return;
+    }
+    setMessage(`Copying ${name}…`);
+    try {
+      await request({ op: 'copy', dir: parentOf(path), file: name, dest: destDir, newName: newName === name ? '' : newName });
+    } catch (err) {
+      setMessage(`Couldn't copy ${name}: ${err.message}`, 'error');
+      return;
+    }
+    if (destDir !== rootDir) expanded.add(destDir);
+    refreshDir(destDir);
+    setMessage(`Copied ${name} to ${joinPath(destDir, newName)}.`, 'ok');
+  }
+
+  // `confirmFirst` is for drag and drop, where a slip of the mouse would move live files.
+  async function moveEntries(items, destDir, confirmFirst = false) {
+    const moving = items.filter((item) => parentOf(item.path) !== destDir);
+    if (!moving.length) return;
+    if (moving.some((item) => destDir === item.path || isInside(destDir, item.path))) {
+      setMessage('A folder can’t be moved into itself.', 'error');
+      return;
+    }
+    const what = moving.length === 1 ? baseName(moving[0].path) : `${moving.length} items`;
+    const where = moving.length === 1 ? `From ${parentOf(moving[0].path)} to ${destDir}` : `To ${destDir}`;
+    if (confirmFirst && !(await ask({ title: `Move ${what}?`, text: where, confirm: 'Move' }))) return;
+    const failed = [];
+    for (const { path, type } of moving) {
+      const name = baseName(path);
+      setMessage(`Moving ${name}…`);
+      try {
+        await request({ op: 'move', dir: parentOf(path), file: name, dest: destDir });
+      } catch (err) {
+        failed.push(`${name}: ${err.message}`);
+        continue;
+      }
+      relocate(path, joinPath(destDir, name), type);
+      listings.delete(parentOf(path));
+    }
+    clearSelection();
+    if (failed.length < moving.length && destDir !== rootDir) expanded.add(destDir);
+    refreshDir(destDir);
+    if (failed.length) setMessage(`Couldn't move ${failed.join(' · ')}`, 'error');
+    else setMessage(`Moved ${what} to ${destDir}.`, 'ok');
+  }
+
+  async function chmodEntry(path, type) {
+    const dir = parentOf(path);
+    const name = baseName(path);
+    const current = listings.get(dir)?.entries.find((entry) => entry.name === name)?.mode || (type === 'dir' ? '0755' : '0644');
+    const mode = await ask({
+      title: `Permissions for ${name}`,
+      text: 'One digit each for the owner, the group and everyone else: 4 = read, 2 = write, 1 = run, added together. Files are usually 644 and folders 755.',
+      value: current,
+      confirm: 'Change',
+      validate: (value) => (/^[0-7]{3,4}$/.test(value) ? '' : 'Enter three or four digits from 0 to 7, such as 644.'),
+    });
+    if (!mode || mode === current) return;
+    try {
+      await request({ op: 'chmod', dir, file: name, mode });
+    } catch (err) {
+      setMessage(`Couldn't change the permissions of ${name}: ${err.message}`, 'error');
+      return;
+    }
+    // Read the folder again so the new mode shows next time.
+    listings.delete(dir);
+    renderTree();
+    setMessage(`Permissions of ${name} are now ${mode.padStart(4, '0')}.`, 'ok');
+  }
+
+  function archiveFormat(name) {
+    return name.toLowerCase().match(/\.(zip|tar\.gz|tar\.bz2|tar)$/)?.[1] || '';
+  }
+
+  // One archive from one or more files and folders, which must sit in the same folder.
+  async function compressEntries(items) {
+    const dir = parentOf(items[0].path);
+    if (items.some((item) => parentOf(item.path) !== dir)) {
+      setMessage('To compress several items together, select items from one folder.', 'error');
+      return;
+    }
+    const names = items.map((item) => baseName(item.path));
+    const what = names.length === 1 ? names[0] : `${names.length} items`;
+    const stem = names.length === 1 ? names[0] : baseName(dir);
+    await listDir(dir).catch(() => {});
+    const archive = await ask({
+      title: `Compress ${what}`,
+      text: `The archive is created in ${dir}. End its name with .zip, .tar.gz, .tar.bz2 or .tar to choose the format.`,
+      value: `${stem}.zip`,
+      select: [0, stem.length],
+      confirm: 'Compress',
+      validate: (value) => validateName(value, dir) || (archiveFormat(value) ? '' : 'End the name with .zip, .tar.gz, .tar.bz2 or .tar.'),
+    });
+    if (!archive) return;
+    setMessage(`Compressing ${what}…`);
+    try {
+      await request({ op: 'compress', dir, file: names[0], files: names, newName: archive, format: archiveFormat(archive) });
+    } catch (err) {
+      setMessage(`Couldn't compress ${what}: ${err.message}`, 'error');
+      return;
+    }
+    clearSelection();
+    refreshDir(dir);
+    setMessage(`Created ${archive}.`, 'ok');
+  }
+
+  async function extractEntry(path) {
+    const dir = parentOf(path);
     const name = baseName(path);
     const ok = await ask({
-      title: `Move ${name} to the trash?`,
-      text: `${type === 'dir' ? 'The folder and everything in it go' : 'It goes'} to your cPanel trash. You can restore it from File Manager with View Trash.`,
+      title: `Extract ${name}?`,
+      text: `Its contents go into ${dir}. Files already there with the same names may be overwritten.`,
+      confirm: 'Extract',
+    });
+    if (!ok) return;
+    setMessage(`Extracting ${name}…`);
+    try {
+      await request({ op: 'extract', dir, file: name, dest: dir });
+    } catch (err) {
+      setMessage(`Couldn't extract ${name}: ${err.message}`, 'error');
+      return;
+    }
+    refreshUnder(dir);
+    setMessage(`Extracted ${name} into ${dir}.`, 'ok');
+  }
+
+  // ---- Upload and download ----
+
+  function downloadEntry(dir, file) {
+    request({ op: 'download', dir, file }).then(
+      () => setMessage(`Downloading ${file}…`, 'ok'),
+      (err) => setMessage(`Couldn't download ${file}: ${err.message}`, 'error'),
+    );
+  }
+
+  function pickUpload(dir, folder = false) {
+    if (!dir) return;
+    uploadDir = dir;
+    const input = folder ? ui.uploadFolderInput : ui.uploadInput;
+    input.value = '';
+    input.click();
+  }
+
+  // items: [{ file, sub }], where `sub` is the folder below `dir` the file goes into ('' for
+  // none). `folders` lists folders to create even if they turn out to be empty.
+  async function uploadItems(items, dir, folders = []) {
+    if ((!items.length && !folders.length) || !dir) return;
+    if (items.length > UPLOAD_MAX_FILES) {
+      setMessage(`That's ${items.length.toLocaleString()} files. Upload up to ${UPLOAD_MAX_FILES.toLocaleString()} at a time, or zip the folder, upload the zip and use Extract here.`, 'error');
+      return;
+    }
+    const top = (item) => (item.sub ? item.sub.split('/')[0] : item.file.name);
+    const entries = await listDir(dir).catch(() => []);
+    const wanted = new Set([...items.map(top), ...folders.map((sub) => sub.split('/')[0])]);
+    const existing = new Set(entries.filter((entry) => wanted.has(entry.name)).map((entry) => entry.name));
+    if (existing.size) {
+      const names = [...existing];
+      const ok = await ask({
+        title: names.length === 1 ? `Replace ${names[0]}?` : `Replace ${names.length} items?`,
+        text: `${dir} already has ${names.slice(0, 5).join(', ')}${names.length > 5 ? ` and ${names.length - 5} more` : ''}. Files with the same names are replaced, and folders are merged.`,
+        confirm: 'Replace',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+
+    // Folders first, parents before the folders inside them.
+    const subs = new Set(folders);
+    for (const item of items) {
+      for (let sub = item.sub; sub; sub = sub.includes('/') ? sub.slice(0, sub.lastIndexOf('/')) : '') subs.add(sub);
+    }
+    try {
+      for (const sub of [...subs].sort((a, b) => a.split('/').length - b.split('/').length)) {
+        const path = joinPath(dir, sub);
+        await request({ op: 'mkdir', dir: parentOf(path), file: baseName(path), existingOk: true });
+      }
+    } catch (err) {
+      refreshUnder(dir);
+      setMessage(`Couldn't create the folders for this upload: ${err.message}`, 'error');
+      return;
+    }
+
+    const failed = [];
+    const queue = items.slice();
+    let started = 0;
+    const worker = async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        const target = item.sub ? joinPath(dir, item.sub) : dir;
+        setMessage(`Uploading ${item.file.name} (${++started} of ${items.length})…`);
+        try {
+          await request({ op: 'upload', dir: target, file: item.file.name, blob: item.file, overwrite: existing.has(top(item)) });
+          dropSearchCache(joinPath(target, item.file.name));
+        } catch (err) {
+          failed.push(`${item.file.name}: ${err.message}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: 3 }, worker));
+
+    if (dir !== rootDir) expanded.add(dir);
+    refreshUnder(dir);
+    const done = items.length - failed.length;
+    const what = items.length === 1 && !subs.size ? items[0].file.name : `${done.toLocaleString()} file${done === 1 ? '' : 's'}${subs.size ? ` in ${subs.size} folder${subs.size === 1 ? '' : 's'}` : ''}`;
+    if (failed.length) setMessage(`Uploaded ${done} of ${items.length}. ${failed.slice(0, 5).join(' · ')}${failed.length > 5 ? ` and ${failed.length - 5} more` : ''}`, 'error');
+    else setMessage(`Uploaded ${what} to ${dir}.`, 'ok');
+  }
+
+  // Follows dropped folders through to the files in them.
+  async function collectDropped(dropped) {
+    const items = [];
+    const folders = [];
+    const visit = async (entry, sub) => {
+      if (items.length > UPLOAD_MAX_FILES) return;
+      if (entry.isFile) {
+        items.push({ file: await new Promise((resolve, reject) => entry.file(resolve, reject)), sub });
+        return;
+      }
+      const path = sub ? `${sub}/${entry.name}` : entry.name;
+      folders.push(path);
+      const reader = entry.createReader();
+      for (;;) {
+        // A folder's contents arrive in batches; an empty batch means that was all.
+        const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+        if (!batch.length) break;
+        for (const child of batch) await visit(child, path);
+      }
+    };
+    for (const entry of dropped) {
+      if (!entry) continue;
+      if (entry.isFile || entry.isDirectory) await visit(entry, '');
+      else items.push({ file: entry, sub: '' });
+    }
+    return { items, folders };
+  }
+
+  // Files dragged in from the computer are uploaded; rows dragged inside the explorer are moved.
+  function setupDragAndDrop() {
+    let marked = null;
+    const mark = (el) => {
+      if (marked === el) return;
+      marked?.classList.remove('drop-target');
+      marked = el;
+      marked?.classList.add('drop-target');
+    };
+    const hasFiles = (event) => event.dataTransfer.types.includes('Files');
+    const accepts = (event) => Boolean(rootDir) && (Boolean(dragged) || hasFiles(event));
+    // A drop on a file lands in the folder that file is in.
+    const dropDir = (event) => {
+      const row = event.target.closest?.('.row');
+      if (!row) return rootDir;
+      return row.dataset.type === 'dir' ? row.dataset.path : row.dataset.dir;
+    };
+
+    ui.tree.addEventListener('dragstart', (event) => {
+      const row = event.target.closest?.('.row');
+      if (!row) return;
+      dragged = selectionFor(row.dataset.path, row.dataset.type);
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', row.dataset.path);
+    });
+    ui.tree.addEventListener('dragend', () => {
+      dragged = null;
+      mark(null);
+    });
+    ui.tree.addEventListener('dragover', (event) => {
+      if (!accepts(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = dragged ? 'move' : 'copy';
+      const dir = dropDir(event);
+      mark(dir === rootDir ? ui.tree : findRow(dir) || ui.tree);
+    });
+    ui.tree.addEventListener('dragleave', (event) => {
+      if (!ui.tree.contains(event.relatedTarget)) mark(null);
+    });
+    ui.tree.addEventListener('drop', (event) => {
+      if (!accepts(event)) return;
+      event.preventDefault();
+      const dir = dropDir(event);
+      mark(null);
+      if (dragged) {
+        const items = dragged;
+        dragged = null;
+        moveEntries(items, dir, true);
+        return;
+      }
+      // The entries have to be taken now: the drop's data is gone once this handler returns.
+      const dropped = [...event.dataTransfer.items]
+        .filter((item) => item.kind === 'file')
+        .map((item) => item.webkitGetAsEntry?.() || item.getAsFile());
+      setMessage('Reading what you dropped…');
+      collectDropped(dropped).then(
+        ({ items, folders }) => uploadItems(items, dir, folders),
+        (err) => setMessage(`Couldn't read what you dropped: ${err.message}`, 'error'),
+      );
+    });
+    // Anywhere else, the browser would open a dropped file in place of the editor.
+    for (const type of ['dragover', 'drop']) {
+      window.addEventListener(type, (event) => {
+        if (!hasFiles(event) || ui.tree.contains(event.target)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'none';
+      });
+    }
+  }
+
+  async function trashEntries(items) {
+    const single = items.length === 1;
+    const what = single ? baseName(items[0].path) : `${items.length} items`;
+    const goes = single ? (items[0].type === 'dir' ? 'The folder and everything in it go' : 'It goes') : 'They go';
+    const ok = await ask({
+      title: `Move ${what} to the trash?`,
+      text: `${goes} to your cPanel trash. You can restore ${single ? 'it' : 'them'} from File Manager with View Trash.`,
       confirm: 'Move to trash',
       danger: true,
     });
     if (!ok) return;
-    try {
-      await request({ op: 'trash', dir: parentOf(path), file: name });
-    } catch (err) {
-      setMessage(`Couldn't move ${name} to the trash: ${err.message}`, 'error');
-      return;
+    const failed = [];
+    for (const { path } of items) {
+      const name = baseName(path);
+      try {
+        await request({ op: 'trash', dir: parentOf(path), file: name });
+      } catch (err) {
+        failed.push(`${name}: ${err.message}`);
+        continue;
+      }
+      const removed = (p) => p === path || isInside(p, path);
+      for (const tab of tabs.filter((t) => removed(t.path))) {
+        // Keep tabs with unsaved work open: saving would put the file back.
+        if (isDirty(tab)) setNotice(tab, { kind: 'trashed', text: `${tab.file} was moved to the trash. Saving creates it again.`, actions: [] });
+        else closeTab(tab);
+      }
+      for (const p of [...expanded].filter(removed)) expanded.delete(p);
+      for (const p of [...listings.keys()].filter(removed)) listings.delete(p);
+      if (lastTreeRow && removed(lastTreeRow.path)) lastTreeRow = null;
+      if (clip?.items.some((item) => removed(item.path))) clip = null;
+      dropSearchCache(path);
+      listings.delete(parentOf(path));
     }
-    const removed = (p) => p === path || isInside(p, path);
-    for (const tab of tabs.filter((t) => removed(t.path))) {
-      // Keep tabs with unsaved work open: saving would put the file back.
-      if (isDirty(tab)) setNotice(tab, { kind: 'trashed', text: `${tab.file} was moved to the trash. Saving creates it again.`, actions: [] });
-      else closeTab(tab);
-    }
-    for (const p of [...expanded].filter(removed)) expanded.delete(p);
-    for (const p of [...listings.keys()].filter(removed)) listings.delete(p);
-    if (lastTreeRow && removed(lastTreeRow.path)) lastTreeRow = null;
-    dropSearchCache(path);
-    refreshDir(parentOf(path));
-    setMessage(`Moved ${name} to the trash.`, 'ok');
+    clearSelection();
+    forgetIndexCache();
+    renderTree();
+    if (failed.length) setMessage(`Couldn't move to the trash: ${failed.join(' · ')}`, 'error');
+    else setMessage(`Moved ${what} to the trash.`, 'ok');
   }
 
   function refreshDir(dir) {
     listings.delete(dir);
+    forgetIndexCache();
+    renderTree();
+  }
+
+  // Forgets everything listed under a folder, after an operation that may have changed any of it.
+  function refreshUnder(dir) {
+    for (const p of [...listings.keys()]) {
+      if (p === dir || isInside(p, dir)) listings.delete(p);
+    }
+    dropSearchCache(dir);
     forgetIndexCache();
     renderTree();
   }
@@ -2360,6 +3183,262 @@
     });
   }
 
+  // ---- Side pane: split editor, Markdown and SVG preview, pictures ----
+
+  function setupSplit() {
+    ui.splitBtn.addEventListener('click', toggleSplit);
+    ui.previewBtn.addEventListener('click', togglePreview);
+    ui.sideClose.addEventListener('click', () => closeSide());
+    editor.onDidFocusEditorText(() => setSideFocus(false));
+    // The preview follows the editor's scroll position, in proportion.
+    editor.onDidScrollChange((event) => {
+      if (!event.scrollTopChanged || split.mode !== 'preview' || split.tab !== active) return;
+      const range = editor.getScrollHeight() - editor.getLayoutInfo().height;
+      const pane = ui.sidePreview;
+      pane.scrollTop = range > 0 ? (editor.getScrollTop() / range) * (pane.scrollHeight - pane.clientHeight) : 0;
+    });
+    editor.addAction({
+      id: 'cpm.splitRight',
+      label: 'View: Split Editor Right',
+      run: () => active && openSide(active),
+    });
+    editor.addAction({
+      id: 'cpm.openPreview',
+      label: 'View: Open Preview to the Side (Markdown, SVG)',
+      run: () => active && canPreview(active) && openSide(active, 'preview'),
+    });
+    editor.addAction({
+      id: 'cpm.closeSide',
+      label: 'View: Close Side Pane',
+      run: () => closeSide(),
+    });
+
+    // Drag (or arrow keys on) the divider to resize the side pane.
+    const resize = (percent) => {
+      prefs.splitWidth = Math.round(Math.min(Math.max(percent, 20), 80));
+      ui.side.style.width = `${prefs.splitWidth}%`;
+    };
+    ui.splitResizer.tabIndex = 0;
+    onDrag(ui.splitResizer, (x) => {
+      const rect = ui.stage.getBoundingClientRect();
+      resize(((rect.right - x) / rect.width) * 100);
+    }, savePrefs);
+    ui.splitResizer.addEventListener('keydown', (event) => {
+      const step = { ArrowLeft: 4, ArrowRight: -4 }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      resize(prefs.splitWidth + step);
+      savePrefs();
+    });
+  }
+
+  function canPreview(tab) {
+    return !tab.image && PREVIEWABLE.test(tab.file);
+  }
+
+  function toggleSplit() {
+    if (split.mode === 'editor') closeSide();
+    else if (active) openSide(active);
+  }
+
+  function togglePreview() {
+    if (split.mode === 'preview' && split.tab === active) closeSide();
+    else if (active && canPreview(active)) openSide(active, 'preview');
+  }
+
+  function openSide(tab, mode = 'editor') {
+    if (tab.image) mode = 'image';
+    clearTimeout(split.timer);
+    Object.assign(split, { tab, mode, timer: 0 });
+    ui.side.hidden = false;
+    ui.splitResizer.hidden = false;
+    ui.side.style.width = `${prefs.splitWidth}%`;
+    ui.sideEditor.hidden = mode !== 'editor';
+    ui.sidePreview.hidden = mode !== 'preview';
+    ui.sidePreview.replaceChildren();
+    ui.sideViewer.hidden = true;
+    if (mode === 'editor') {
+      split.editor ||= createSideEditor();
+      split.editor.setModel(tab.model);
+      // Start where the main editor is when it shows the same file.
+      if (tab === active) split.editor.restoreViewState(editor.saveViewState());
+      split.editor.focus();
+    } else {
+      split.editor?.setModel(null);
+      setSideFocus(false);
+      if (mode === 'image') showImage(ui.sideViewer, tab);
+      else renderPreview();
+    }
+    updateSideChrome();
+    renderTabs();
+  }
+
+  function createSideEditor() {
+    const side = monaco.editor.create(ui.sideEditor, {
+      model: null,
+      automaticLayout: true,
+      fixedOverflowWidgets: true,
+      ...monacoOptions(),
+    });
+    side.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyZ, toggleWrap);
+    side.onDidFocusEditorText(() => setSideFocus(true));
+    return side;
+  }
+
+  function closeSide(refocus = true) {
+    if (!split.tab) return;
+    clearTimeout(split.timer);
+    Object.assign(split, { tab: null, mode: '', timer: 0 });
+    split.images.clear();
+    split.editor?.setModel(null);
+    ui.sidePreview.replaceChildren();
+    ui.sideViewer.replaceChildren();
+    ui.side.hidden = true;
+    ui.splitResizer.hidden = true;
+    setSideFocus(false);
+    updateSideChrome();
+    renderTabs();
+    if (refocus) editor?.focus();
+  }
+
+  // Save acts on the pane that was used last.
+  function setSideFocus(focused) {
+    split.focused = focused && split.mode === 'editor';
+    ui.side.classList.toggle('focused', split.focused);
+  }
+
+  function focusedTab() {
+    return split.focused && split.tab ? split.tab : active;
+  }
+
+  function updateSideChrome() {
+    ui.splitBtn.disabled = !active;
+    ui.splitBtn.setAttribute('aria-pressed', String(split.mode === 'editor'));
+    ui.previewBtn.hidden = !(active && canPreview(active));
+    ui.previewBtn.setAttribute('aria-pressed', String(split.mode === 'preview' && split.tab === active));
+    const tab = split.tab;
+    if (!tab) return;
+    const name = document.createElement('span');
+    name.textContent = tab.file;
+    ui.sideName.replaceChildren(fileIcon(tab.file), name);
+    ui.sideName.title = tab.path;
+    ui.sideKind.textContent = split.mode === 'preview' ? 'Preview' : '';
+  }
+
+  function schedulePreview() {
+    clearTimeout(split.timer);
+    split.timer = setTimeout(renderPreview, 200);
+  }
+
+  function renderPreview() {
+    split.timer = 0;
+    const tab = split.tab;
+    if (!tab || split.mode !== 'preview' || tab.model.isDisposed()) return;
+    const pane = ui.sidePreview;
+    const top = pane.scrollTop;
+    const text = tab.model.getValue();
+    const svg = /\.svg$/i.test(tab.file);
+    pane.classList.toggle('svg', svg);
+    if (svg) {
+      // As an <img>, an SVG can't run scripts or load anything.
+      const img = document.createElement('img');
+      img.alt = tab.file;
+      img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`;
+      pane.replaceChildren(img);
+    } else {
+      pane.replaceChildren(window.CPM_MARKDOWN.render(text, {
+        code: highlightCode,
+        link: (link, href) => previewLink(link, href, tab),
+        image: (src, alt) => previewImage(src, alt, tab),
+      }));
+    }
+    pane.scrollTop = top;
+  }
+
+  // Fenced code in a preview is colored by Monaco, in the editor's theme.
+  function highlightCode(code, name) {
+    const languages = monaco.languages.getLanguages();
+    const language = languages.find((l) => l.id === name || l.aliases?.some((alias) => alias.toLowerCase() === name))
+      || languages.find((l) => l.extensions?.includes(`.${name}`));
+    if (!language) return;
+    monaco.editor.colorize(code.textContent, language.id, {}).then((html) => {
+      code.innerHTML = html.replace(/<br\s*\/?>$/, '');
+    }, () => {});
+  }
+
+  function safeDecode(text) {
+    try {
+      return decodeURIComponent(text);
+    } catch {
+      return text;
+    }
+  }
+
+  // Resolves a relative link against a folder. Site-absolute paths and other schemes aren't followed.
+  function resolvePath(dir, link) {
+    const rel = link.replace(/[?#].*$/, '');
+    if (!rel || rel.startsWith('/') || /^[a-z][\w+.-]*:/i.test(rel)) return null;
+    const parts = dir.split('/').filter(Boolean);
+    for (const part of safeDecode(rel).split('/')) {
+      if (part === '..') parts.pop();
+      else if (part && part !== '.') parts.push(part);
+    }
+    return `/${parts.join('/')}`;
+  }
+
+  function previewLink(link, href, tab) {
+    if (/^(https?:|mailto:)/i.test(href)) {
+      link.href = href;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      return;
+    }
+    link.title = href;
+    if (href.startsWith('#')) {
+      const wanted = safeDecode(href.slice(1)).toLowerCase();
+      link.classList.add('local');
+      link.addEventListener('click', () => {
+        [...ui.sidePreview.querySelectorAll('[data-slug]')].find((heading) => heading.dataset.slug === wanted)?.scrollIntoView();
+      });
+      return;
+    }
+    // A link to another file in the project opens it in the editor.
+    const path = resolvePath(tab.dir, href);
+    if (!path) return;
+    link.classList.add('local');
+    link.addEventListener('click', () => openFile(parentOf(path), baseName(path)));
+  }
+
+  // Pictures next to the file are fetched through cPanel. Pictures on other servers can't be
+  // shown: this page is blocked from the network, which is what keeps your code private.
+  function previewImage(src, alt, tab) {
+    const img = document.createElement('img');
+    img.alt = alt;
+    if (/^data:image\//i.test(src)) {
+      img.src = src;
+      return img;
+    }
+    const path = resolvePath(tab.dir, src);
+    if (!path || !IMAGE_TYPES[extensionOf(path.toLowerCase())]) {
+      const note = document.createElement('span');
+      note.className = 'missing';
+      note.textContent = `[image: ${alt || src}]`;
+      note.title = src;
+      return note;
+    }
+    let loading = split.images.get(path);
+    if (!loading) {
+      loading = loadImage(parentOf(path), baseName(path)).then((image) => image.url);
+      split.images.set(path, loading);
+    }
+    loading.then((url) => {
+      img.src = url;
+    }, () => {
+      img.alt = `${alt || src} (couldn’t be loaded)`;
+    });
+    return img;
+  }
+
   // ---- Find in files (Ctrl+Shift+F) ----
 
   function setupSearch() {
@@ -2385,11 +3464,20 @@
         runSearch();
       });
     }
+    ui.replaceInput.addEventListener('input', renderSearchResults);
+    ui.replaceInput.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      replaceAll();
+    });
+    ui.replaceAll.addEventListener('click', replaceAll);
     ui.searchResults.addEventListener('click', (event) => {
       const line = event.target.closest('.sr-line');
       if (line) {
         const { group, match } = search.matchList[Number(line.dataset.index)];
-        openFile(group.dir, group.file, { line: match.line, column: match.column, length: match.length });
+        // With something to replace with, a click shows what the file would become, as in VS Code.
+        if (ui.replaceInput.value) previewReplace(group);
+        else openFile(group.dir, group.file, { line: match.line, column: match.column, length: match.length });
         return;
       }
       const head = event.target.closest('.sr-file');
@@ -2461,6 +3549,8 @@
     const generation = ++search.generation;
     search.groups = [];
     search.total = 0;
+    search.matcher = null;
+    search.limited = false;
     let matcher;
     try {
       matcher = buildMatcher();
@@ -2474,8 +3564,11 @@
       setSearchStatus('');
       return;
     }
+    search.matcher = matcher;
+    search.regex = isPressed(ui.searchRegex);
 
     setSearchStatus(`Listing files in ${baseName(rootDir)}…`);
+    wantAllFiles();
     await buildIndex();
     if (generation !== search.generation) return;
     const include = includeFilter();
@@ -2506,6 +3599,7 @@
     await Promise.all(Array.from({ length: 6 }, worker));
     if (generation !== search.generation) return;
 
+    search.limited = full || candidates.length > files.length || quick.truncated;
     renderSearchResults();
     const notes = [];
     if (full) notes.push(`Stopped at ${SEARCH_MAX_RESULTS.toLocaleString()} results.`);
@@ -2525,7 +3619,7 @@
     const tab = tabs.find((t) => t.path === path);
     if (tab) return tab.model.getValue();
     if (search.cache.has(path)) return search.cache.get(path);
-    const { content } = await request({ op: 'read', dir: item.dir, file: item.file });
+    const { content } = await request({ op: 'read', dir: item.dir, file: item.file }, { background: true });
     if (search.cacheChars + content.length <= SEARCH_CACHE_CHARS) {
       search.cache.set(path, content);
       search.cacheChars += content.length;
@@ -2589,6 +3683,8 @@
 
   function renderSearchResults() {
     const rows = document.createDocumentFragment();
+    const replacing = Boolean(ui.replaceInput.value) && Boolean(search.matcher);
+    ui.replaceAll.disabled = !search.groups.length;
     search.matchList = [];
     for (const group of search.groups) {
       const collapsed = search.collapsed.has(group.path);
@@ -2622,13 +3718,133 @@
         const startAt = match.column - 1;
         const from = Math.max(0, startAt - 30);
         const before = (from ? '…' : '') + match.text.slice(from, startAt).trimStart();
-        const mark = document.createElement('mark');
-        mark.textContent = match.text.substr(startAt, match.length);
-        row.append(before, mark, match.text.slice(startAt + match.length, startAt + match.length + 120));
+        const found = match.text.substr(startAt, match.length);
+        const after = match.text.slice(startAt + match.length, startAt + match.length + 120);
+        if (replacing) {
+          const gone = document.createElement('del');
+          gone.textContent = found;
+          const added = document.createElement('ins');
+          added.textContent = replaceIn(found, match.text, startAt);
+          row.append(before, gone, added, after);
+        } else {
+          const mark = document.createElement('mark');
+          mark.textContent = found;
+          row.append(before, mark, after);
+        }
         rows.append(row);
       }
     }
     ui.searchResults.replaceChildren(rows);
+  }
+
+  // ---- Replace in files ----
+
+  // "$1" and "$&" in the replacement stand for parts of the match, in regular expression mode only.
+  function expandReplacement(template, groups) {
+    if (!search.regex) return template;
+    return template.replace(/\$(\$|&|\d{1,2})/g, (whole, key) => {
+      if (key === '$') return '$';
+      if (key === '&') return groups[0];
+      return Number(key) < groups.length ? groups[Number(key)] ?? '' : whole;
+    });
+  }
+
+  // Replaces every match in `text`, line by line like the search itself. With `line` and `at`
+  // it instead returns what the single match `text`, found at `at` in `line`, turns into.
+  function replaceIn(text, line = null, at = 0) {
+    const matcher = search.matcher;
+    const template = ui.replaceInput.value;
+    const swap = (...args) => {
+      // Empty matches aren't listed by the search, so they aren't replaced either.
+      if (!args[0]) return args[0];
+      return expandReplacement(template, args.slice(0, args.findIndex((arg, i) => i > 0 && typeof arg === 'number')));
+    };
+    if (line !== null) {
+      matcher.lastIndex = at;
+      const found = matcher.exec(line);
+      return found && found.index === at ? swap(...found, found.index) : template;
+    }
+    return text.replace(/[^\r\n]+/g, (one) => one.replace(matcher, swap));
+  }
+
+  async function previewReplace(group) {
+    const tab = tabs.find((t) => t.path === group.path);
+    let text;
+    try {
+      text = tab ? tab.model.getValue() : (await request({ op: 'read', dir: group.dir, file: group.file })).content;
+    } catch (err) {
+      setMessage(`Couldn't read ${group.file}: ${err.message}`, 'error');
+      return;
+    }
+    openDiff({
+      title: `Replace in ${group.file}`,
+      legend: 'Left: now · Right: after replacing',
+      original: text,
+      modified: replaceIn(text),
+      readOnly: true,
+      language: guessLanguage(group.file),
+      actions: [
+        { label: 'Replace in this file', primary: true, run: () => { closeDiff(); replaceGroups([group]); } },
+        { label: 'Open file', run: () => { closeDiff(false); openFile(group.dir, group.file); } },
+        { label: 'Close', run: () => closeDiff() },
+      ],
+    });
+  }
+
+  async function replaceAll() {
+    const groups = search.groups.slice();
+    if (!search.matcher || !groups.length) return;
+    const template = ui.replaceInput.value;
+    const ok = await ask({
+      title: `Replace in ${groups.length} file${groups.length === 1 ? '' : 's'}?`,
+      text: `Every match of “${ui.searchInput.value}” becomes ${template ? `“${template}”` : 'nothing (the matches are deleted)'}. `
+        + 'Files that are open are changed in the editor and left for you to save. The others are saved to the server right away, '
+        + 'and each one’s previous version is kept in its History.'
+        + (search.limited ? ' The search stopped early, so run Replace all again afterwards to catch the rest.' : ''),
+      confirm: 'Replace',
+      danger: true,
+    });
+    if (ok) replaceGroups(groups);
+  }
+
+  async function replaceGroups(groups) {
+    if (!search.matcher) return;
+    let written = 0;
+    let edited = 0;
+    const failed = [];
+    for (const [index, group] of groups.entries()) {
+      setSearchStatus(`Replacing… ${index + 1} of ${groups.length} file${groups.length === 1 ? '' : 's'}`);
+      const tab = tabs.find((t) => t.path === group.path);
+      try {
+        if (tab) {
+          const text = tab.model.getValue();
+          const replaced = replaceIn(text);
+          if (replaced !== text) {
+            replaceContent(tab, replaced);
+            edited++;
+          }
+          continue;
+        }
+        // Read again just before writing, so a file that changed since the search isn't clobbered.
+        const { content, charset } = await request({ op: 'read', dir: group.dir, file: group.file });
+        const replaced = replaceIn(content);
+        if (replaced === content) continue;
+        await request({ op: 'write', dir: group.dir, file: group.file, content: replaced, charset });
+        updateSearchCache(group.path, replaced);
+        if (phpIndex.promise && /\.php$/i.test(group.file)) window.CPM_PHP_INDEX.update(group.path, replaced);
+        await recordHistory({ path: group.path, openedAt: Date.now(), historyStarted: false }, content, replaced);
+        written++;
+      } catch (err) {
+        failed.push(`${group.file}: ${err.message}`);
+      }
+    }
+    const parts = [];
+    if (written) parts.push(`saved ${written} file${written === 1 ? '' : 's'} to the server`);
+    if (edited) parts.push(`changed ${edited} open file${edited === 1 ? '' : 's'}, not saved yet`);
+    const summary = parts.length ? `Replaced: ${parts.join(' and ')}.` : 'Nothing was replaced.';
+    await runSearch();
+    if (failed.length) setMessage(`${summary} Failed: ${failed.slice(0, 5).join(' · ')}`, 'error');
+    else setMessage(summary, 'ok');
   }
 
   // ---- Helpers ----
@@ -2689,6 +3905,7 @@
   }
 
   function formatSize(bytes) {
+    if (bytes < 1024) return `${bytes} bytes`;
     return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
   }
 
@@ -2859,6 +4076,10 @@
 
   function updateCursor() {
     if (!active) return;
+    if (active.image) {
+      ui.cursor.textContent = '';
+      return;
+    }
     const pos = editor.getPosition();
     const selection = editor.getSelection();
     if (!pos) return;
@@ -2883,7 +4104,7 @@
   }
 
   function loadPrefs() {
-    const defaults = { theme: 'system', wrap: false, trustDismissed: false, sidebar: true, sidebarWidth: 240 };
+    const defaults = { theme: 'system', wrap: false, trustDismissed: false, sidebar: true, sidebarWidth: 240, splitWidth: 50 };
     try {
       return { ...defaults, ...JSON.parse(localStorage.getItem('cpm-prefs') || '{}') };
     } catch {

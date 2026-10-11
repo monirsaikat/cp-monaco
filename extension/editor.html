@@ -35,6 +35,10 @@
     <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></symbol>
     <symbol id="i-diff" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16M6.5 10h3M14.5 10h3M16 8.5v3M6.5 15h3M14.5 15h3" /></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l9.5 17h-19z" /><path d="M12 10v4M12 17.5v.01" /></symbol>
+    <symbol id="i-split" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16" /></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></symbol>
+    <symbol id="i-replace" viewBox="0 0 24 24"><path d="M4 6h11a4 4 0 0 1 0 8H8" /><path d="M11 11l-3 3 3 3" /></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M6 10l6-6 6 6M4 20h16" /></symbol>
   </svg>
 
   <header class="bar">
@@ -59,6 +63,14 @@
       <button id="wrap" type="button" aria-pressed="false" title="Toggle word wrap (Alt+Z)">
         <svg class="icon"><use href="#i-wrap" /></svg>
         <span class="label">Wrap</span>
+      </button>
+      <button id="preview-btn" type="button" aria-pressed="false" title="Open preview to the side (Ctrl+Shift+V)" hidden>
+        <svg class="icon"><use href="#i-eye" /></svg>
+        <span class="label">Preview</span>
+      </button>
+      <button id="split-btn" type="button" aria-pressed="false" title="Split editor right (Ctrl+\)" disabled>
+        <svg class="icon"><use href="#i-split" /></svg>
+        <span class="label">Split</span>
       </button>
       <button id="review" type="button" title="Compare your changes with the version on the server" disabled>
         <svg class="icon"><use href="#i-diff" /></svg>
@@ -121,6 +133,11 @@
           <button id="new-folder" type="button" class="icon-btn small" title="New folder" aria-label="New folder">
             <svg class="icon"><use href="#i-folder-plus" /></svg>
           </button>
+          <button id="upload" type="button" class="icon-btn small" title="Upload files" aria-label="Upload files">
+            <svg class="icon"><use href="#i-upload" /></svg>
+          </button>
+          <input id="upload-input" type="file" multiple hidden>
+          <input id="upload-folder-input" type="file" webkitdirectory hidden>
           <button id="root-up" type="button" class="icon-btn small" title="Show parent folder" aria-label="Show parent folder">
             <svg class="icon"><use href="#i-up" /></svg>
           </button>
@@ -139,6 +156,12 @@
             <button id="search-word" type="button" class="toggle" aria-pressed="false" title="Match whole word" aria-label="Match whole word"><u>ab</u></button>
             <button id="search-regex" type="button" class="toggle" aria-pressed="false" title="Use regular expression" aria-label="Use regular expression">.*</button>
           </div>
+          <div class="search-box">
+            <input id="replace-input" type="text" placeholder="Replace" autocomplete="off" spellcheck="false" aria-label="Replace with">
+            <button id="replace-all" type="button" class="toggle" title="Replace all" aria-label="Replace all" disabled>
+              <svg class="icon"><use href="#i-replace" /></svg>
+            </button>
+          </div>
           <input id="search-include" type="text" placeholder="Files to include (e.g. *.php, wp-content/themes)" autocomplete="off" spellcheck="false" aria-label="Files to include">
         </div>
         <p class="search-status" id="search-status"></p>
@@ -153,26 +176,45 @@
         <p id="notice-text"></p>
         <div class="notice-actions" id="notice-actions"></div>
       </div>
-      <div class="stage">
-        <main id="editor"></main>
-        <div class="diff" id="diff" hidden>
-          <div class="diff-bar">
-            <div class="diff-title">
-              <strong id="diff-title"></strong>
-              <span id="diff-legend"></span>
+      <div class="stage" id="stage">
+        <div class="stage-main">
+          <main id="editor"></main>
+          <div class="viewer" id="viewer" hidden></div>
+          <div class="diff" id="diff" hidden>
+            <div class="diff-bar">
+              <div class="diff-title">
+                <strong id="diff-title"></strong>
+                <span id="diff-legend"></span>
+              </div>
+              <div class="diff-actions" id="diff-actions"></div>
             </div>
-            <div class="diff-actions" id="diff-actions"></div>
+            <div class="diff-editor" id="diff-editor"></div>
           </div>
-          <div class="diff-editor" id="diff-editor"></div>
+          <div id="empty" class="cover" hidden>
+            <p>No file open.<br>Pick one from the explorer, or press <kbd>Ctrl</kbd> + <kbd>P</kbd> to go to a file.</p>
+          </div>
+          <div id="overlay" class="cover">
+            <img src="icons/logo.svg" alt="" width="40" height="40">
+            <p id="overlay-text">Loading editor…</p>
+            <button id="overlay-classic" type="button" hidden>Use cPanel editor</button>
+          </div>
         </div>
-        <div id="empty" class="cover" hidden>
-          <p>No file open.<br>Pick one from the explorer, or press <kbd>Ctrl</kbd> + <kbd>P</kbd> to go to a file.</p>
-        </div>
-        <div id="overlay" class="cover">
-          <img src="icons/logo.svg" alt="" width="40" height="40">
-          <p id="overlay-text">Loading editor…</p>
-          <button id="overlay-classic" type="button" hidden>Use cPanel editor</button>
-        </div>
+        <div class="resizer" id="split-resizer" role="separator" aria-orientation="vertical" aria-label="Resize side pane" hidden></div>
+        <section class="side" id="side" aria-label="Side pane" hidden>
+          <div class="side-head">
+            <span class="side-name" id="side-name"></span>
+            <span class="side-kind" id="side-kind"></span>
+            <span class="spacer"></span>
+            <button id="side-close" type="button" class="icon-btn small" title="Close side pane" aria-label="Close side pane">
+              <svg class="icon"><use href="#i-x" /></svg>
+            </button>
+          </div>
+          <div class="side-body">
+            <div id="side-editor"></div>
+            <div class="viewer" id="side-viewer" hidden></div>
+            <div class="md" id="side-preview" hidden></div>
+          </div>
+        </section>
       </div>
     </div>
   </div>
@@ -244,7 +286,7 @@
   </dialog>
 
   <div class="quick-open" id="quick-open" role="dialog" aria-label="Go to file" hidden>
-    <input id="quick-input" type="text" placeholder="Search files by name (append :line to jump to a line)" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="quick-list" aria-autocomplete="list">
+    <input id="quick-input" type="text" placeholder="Search files by name (:line jumps to a line, # finds a class or function)" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="quick-list" aria-autocomplete="list">
     <ul id="quick-list" role="listbox" aria-label="Matching files"></ul>
     <p class="quick-status" id="quick-status"></p>
   </div>
@@ -263,7 +305,7 @@
           <div>
             <h3>Your files only go to your own server</h3>
             <p>Files are loaded and saved through your cPanel's own File Manager API, using the login you already have. No other server is involved.</p>
-            <p class="verify">Check it: open DevTools → Network. The only requests are to <code>/execute/Fileman</code> and <code>/json-api/cpanel</code> (File Manager functions) on your cPanel.</p>
+            <p class="verify">Check it: open DevTools → Network. The only requests are to <code>/execute/Fileman</code>, <code>/json-api/cpanel</code> (File Manager functions) and <code>/download</code> (image previews and downloads) on your cPanel.</p>
           </div>
         </li>
         <li>
@@ -324,6 +366,10 @@
   <script src="themes.js"></script>
   <script src="settings.js"></script>
   <script src="settings-ui.js"></script>
+  <script src="markdown.js"></script>
+  <script src="blade.js"></script>
+  <script src="laravel.js"></script>
+  <script src="wordpress.js"></script>
   <script src="php-symbols.js"></script>
   <script src="php-docs.js"></script>
   <script src="php-index.js"></script>

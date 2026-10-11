@@ -95,10 +95,12 @@
     'onclick content charset lang colspan rowspan tabindex'
   ).split(' ');
 
-  // True when the cursor is inside a <?php … ?> block (or an unfinished one).
-  function inPhp(text) {
+  // True when the cursor is inside a <?php … ?> block (or an unfinished one) or, in a Blade
+  // template, inside an echo, an @php block or a directive's arguments.
+  function inPhp(text, model) {
     const open = Math.max(text.lastIndexOf('<?php'), text.lastIndexOf('<?='), text.lastIndexOf('<?\n'));
-    return open !== -1 && open > text.lastIndexOf('?>');
+    if (open !== -1 && open > text.lastIndexOf('?>')) return true;
+    return model.getLanguageId() === 'blade' && Boolean(window.CPM_BLADE?.inCode(text));
   }
 
   function unique(matches) {
@@ -115,12 +117,14 @@
 
   function register(monaco) {
     MEMBERS.init(monaco);
+    // Blade templates are HTML with PHP in them, like .php files.
+    const languages = ['php', 'blade'];
     const Kind = monaco.languages.CompletionItemKind;
     const Rule = monaco.languages.CompletionItemInsertTextRule;
     const functions = FUNCTIONS.map(signature);
     const phpDefaults = { insertTextRules: Rule.InsertAsSnippet };
 
-    monaco.languages.registerCompletionItemProvider('php', {
+    monaco.languages.registerCompletionItemProvider(languages, {
       triggerCharacters: ['$', '>', ':', '<', ' ', '"', '\'', '-'],
       provideCompletionItems(model, position) {
         const before = model.getValueInRange({ startLineNumber: 1, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column });
@@ -128,7 +132,7 @@
         const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn };
         const line = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
 
-        if (!inPhp(before)) return { suggestions: htmlSuggestions(monaco, model, position, line, range) };
+        if (!inPhp(before, model)) return { suggestions: htmlSuggestions(monaco, model, position, line, range) };
 
         const all = model.getValue();
         const suggestions = [];
@@ -214,8 +218,22 @@
         for (const m of all.matchAll(/\b(?:class|interface|trait|enum)\s+(\w+)/g)) {
           suggestions.push({ label: m[1], kind: Kind.Class, insertText: m[1], range, sortText: `0${m[1]}` });
         }
-        for (const name of unique([...all.matchAll(/\bfunction\s+(\w+)\s*\(/g)].map((m) => m[1]))) {
+        const declared = unique([...all.matchAll(/\bfunction\s+(\w+)\s*\(/g)].map((m) => m[1]));
+        for (const name of declared) {
           suggestions.push({ label: name, kind: Kind.Function, insertText: `${name}($0)`, range, sortText: `0${name}`, ...phpDefaults });
+        }
+        // Functions declared in the project's other files.
+        for (const fn of window.CPM_PHP_INDEX.functions()) {
+          if (declared.includes(fn.n)) continue;
+          suggestions.push({
+            label: { label: fn.n, description: `(${fn.sig || ''})` },
+            kind: Kind.Function,
+            insertText: `${fn.n}($0)`,
+            detail: fn.file.split('/').pop(),
+            range,
+            sortText: `2${fn.n}`,
+            ...phpDefaults,
+          });
         }
         for (const name of unique([...all.matchAll(/\bconst\s+(\w+)\s*=/g)].map((m) => m[1]))) {
           suggestions.push({ label: name, kind: Kind.Constant, insertText: name, range, sortText: `0${name}` });
@@ -226,11 +244,11 @@
       resolveCompletionItem: (item) => MEMBERS.resolveItem(item),
     });
 
-    monaco.languages.registerHoverProvider('php', {
+    monaco.languages.registerHoverProvider(languages, {
       provideHover: (model, position) => MEMBERS.hover(model, position),
     });
 
-    monaco.languages.registerSignatureHelpProvider('php', {
+    monaco.languages.registerSignatureHelpProvider(languages, {
       signatureHelpTriggerCharacters: ['(', ','],
       signatureHelpRetriggerCharacters: [','],
       provideSignatureHelp: (model, position) => MEMBERS.signatureHelp(model, position),

@@ -439,6 +439,24 @@ button.primary.danger:hover:not(:disabled) {
   outline-offset: -2px;
 }
 
+.file-tree .row.selected {
+  background: color-mix(in srgb, var(--accent) 26%, var(--bar));
+}
+
+/* Cut, waiting to be pasted. */
+.file-tree .row.cut {
+  opacity: 0.5;
+}
+
+/* Where a dragged file or an upload will land. */
+.file-tree .row.drop-target {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bar));
+}
+
+.file-tree.drop-target {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 .file-tree .note {
   height: 24px;
   line-height: 24px;
@@ -672,6 +690,20 @@ button.toggle[aria-pressed="true"] {
   color: var(--text);
 }
 
+/* What a replacement would do: the match struck out, then what takes its place. */
+.sr-line del {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--danger) 24%, transparent);
+  color: var(--text);
+}
+
+.sr-line ins {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ok) 24%, transparent);
+  color: var(--text);
+  text-decoration: none;
+}
+
 .search-results button:focus-visible {
   outline-offset: -2px;
 }
@@ -723,6 +755,15 @@ button.toggle[aria-pressed="true"] {
   font-size: 12px;
 }
 
+/* Also shown in the side pane. */
+.tab.in-side .tab-name {
+  font-style: italic;
+}
+
+#preview-btn[hidden] {
+  display: none;
+}
+
 button.tab-close {
   display: grid;
   place-items: center;
@@ -761,9 +802,15 @@ button.tab-close .icon {
 /* Editor area */
 
 .stage {
-  position: relative;
+  display: flex;
   flex: 1;
   min-height: 0;
+}
+
+.stage-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
   /* Keeps Monaco's internal z-indexes from escaping, so overlays here can sit above them. */
   isolation: isolate;
 }
@@ -817,6 +864,276 @@ button.tab-close .icon {
 
 .cover button {
   background: var(--hover);
+}
+
+/* Image preview */
+
+.viewer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.viewer[hidden] {
+  display: none;
+}
+
+.viewer-frame {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 24px;
+  overflow: auto;
+}
+
+.viewer-frame img {
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
+  object-fit: contain;
+  /* A checkerboard, so transparent areas are visible. */
+  background: repeating-conic-gradient(var(--hover) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+  cursor: zoom-in;
+}
+
+.viewer.actual .viewer-frame img {
+  max-width: none;
+  max-height: none;
+  cursor: zoom-out;
+}
+
+.viewer p {
+  margin: 0;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  flex: none;
+}
+
+/* Side pane: a second editor, a rendered preview or an image */
+
+.side {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-width: 0;
+  isolation: isolate;
+}
+
+.side[hidden] {
+  display: none;
+}
+
+.side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 6px 0 12px;
+  background: var(--bar);
+  white-space: nowrap;
+  flex: none;
+}
+
+.side-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+}
+
+.side.focused .side-name {
+  color: var(--text);
+}
+
+.side-kind {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.side-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+#side-editor,
+.md {
+  position: absolute;
+  inset: 0;
+}
+
+/* Rendered Markdown */
+
+.md {
+  padding: 20px 28px 40px;
+  overflow: auto;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: 1.4em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.md h1 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.9em;
+}
+
+.md h2 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--line);
+  font-size: 1.45em;
+}
+
+.md h3 {
+  font-size: 1.2em;
+}
+
+.md h4,
+.md h5,
+.md h6 {
+  font-size: 1em;
+}
+
+.md p,
+.md ul,
+.md ol,
+.md pre,
+.md table,
+.md blockquote {
+  margin: 0 0 1em;
+}
+
+.md ul,
+.md ol {
+  padding-left: 1.8em;
+}
+
+.md li > ul,
+.md li > ol {
+  margin-bottom: 0;
+}
+
+.md li.task {
+  list-style: none;
+}
+
+.md li.task input {
+  margin: 0 0.5em 0 -1.4em;
+  vertical-align: middle;
+}
+
+.md a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.md a[href]:hover,
+.md a.local:hover {
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.md code {
+  font-size: 0.88em;
+}
+
+.md pre {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--hover);
+  overflow: auto;
+  line-height: 1.5;
+}
+
+.md pre code {
+  padding: 0;
+  background: none;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+.md blockquote {
+  padding: 0 1em;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+
+.md blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.md table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+}
+
+.md th,
+.md td {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+}
+
+.md th {
+  background: var(--hover);
+  font-weight: 600;
+}
+
+.md hr {
+  height: 1px;
+  margin: 1.6em 0;
+  border: 0;
+  background: var(--line);
+}
+
+.md img {
+  max-width: 100%;
+}
+
+.md .missing {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* An SVG file previewed as the picture it draws. */
+.md.svg {
+  display: flex;
+  padding: 24px;
+}
+
+.md.svg[hidden] {
+  display: none;
+}
+
+.md.svg img {
+  margin: auto;
+  max-height: 100%;
 }
 
 /* Notice bar (recovered drafts, trashed files) */

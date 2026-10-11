@@ -23,10 +23,18 @@ Open any file in File Manager the way you normally do. Instead of cPanel's built
 - **Project-aware PHP completion**: after `->` and `::` it knows the methods, properties, constants and enum cases of your own classes, including inherited and trait members, and follows `new Foo`, type hints, `@var` comments, `$this->prop` and call chains such as `$user->posts()->first()->`. Typing a class name from another file adds the `use` import for you, and `use App\Mo…` completes from your project. Class names, method signatures and Eloquent `$fillable` fields are indexed in the background, a few files at a time, and remembered between visits.
 - **Settings page like VS Code's** (`Ctrl+,` or the gear in the toolbar): search, a category tree, a bar beside every setting you've changed and a one-click reset. About 50 settings: font, cursor, tab size and indentation, word wrap, minimap, whitespace, suggestions, color theme, **Auto Save** (after a delay, when the editor loses focus, or when the window does), **Format On Save**, trim trailing whitespace, final newline, hidden files in the explorer, the PHP index and formatter version, and Emmet. Settings apply live. Use the **Server** tab to keep different settings for a particular cPanel server, and type `@modified` in the search box to see everything you've changed.
 - **PHP documentation built in**: completion for PHP's own functions (with parameter placeholders), classes and constants such as `PHP_EOL`; hover any function, method, class, constant or variable for its signature, a description, parameter notes and a link to the manual; **parameter hints** appear as you type a call and follow the argument you're on, for built-in functions, your own classes' methods and functions in the file. Built-in classes work everywhere the project index does, so `$date->`, `catch (Exception $e) { $e->` and a class that `extends Exception` all complete. After `new`, `extends`, `implements`, `instanceof` and `catch (` only classes are offered. Covers the core extensions most sites use (standard, SPL, date, json, mbstring, PDO, mysqli, curl, DOM, and more) for PHP 8.4.
+- **Go to definition** (`F12` or `Ctrl+Click`): jump to where a class, method, property, constant or function of your project is declared, in the same file or another one. `Ctrl+Shift+O` lists the classes and functions of the current file, and typing `#` in Go to file (`Ctrl+P`) finds a class, method or function anywhere in the project.
+- **PHP syntax errors underlined** as you type, before a broken file reaches your live site.
+- **WordPress**: in a WordPress site, its functions and classes (`get_post_meta()`, `WP_Query`, `$wpdb->`…) complete with documentation and parameter hints, and hook names complete inside `add_action('…')`, `add_filter('…')`, `do_action('…')` and `apply_filters('…')`.
 - **Format PHP**: `Shift+Alt+F` formats the file with Prettier's PHP plugin, in a background thread so the editor never freezes. Syntax errors are reported with their line number and your file is left untouched.
 - **Go to file (`Ctrl+P`)**: fuzzy-search every file in the explorer's folder by name or path. The list from your last visit appears instantly and is refreshed in the background; the open file's project folder is indexed first. Add `:42` to jump straight to line 42.
-- **Find in files (`Ctrl+Shift+F`)**: search the text of every file in the explorer's folder, with match case, whole word, regular expressions and a "files to include" filter.
-- **File operations**: create, rename and delete (move to trash) files and folders from the explorer's right-click menu.
+- **Find and replace in files (`Ctrl+Shift+F`)**: search the text of every file in the explorer's folder, with match case, whole word, regular expressions and a "files to include" filter. Type a replacement to see each match struck out next to what replaces it, click a result to compare the file before and after, then replace in one file or all of them.
+- **File operations**: create, rename, copy, cut and paste, duplicate, move (drag and drop), change permissions, compress, extract and delete (move to trash) files and folders from the explorer's right-click menu. `Ctrl+click` and `Shift+click` select several at once.
+- **Upload and download**: drop files or whole folders from your computer onto a folder in the explorer to upload them, or use **Upload files** and **Upload folder**. **Download** saves any file to your computer.
+- **Split editor** (`Ctrl+\`): a second pane beside the editor, for another file or another part of the same one. **Open to the side** in the explorer or a tab's right-click menu puts a file there.
+- **Markdown and SVG preview** (`Ctrl+Shift+V`): a live preview beside the file that updates as you type and follows your scrolling, with highlighted code blocks, tables and task lists.
+- **Image preview**: PNG, JPEG, GIF, WebP, AVIF, BMP and ICO files open as pictures, with their dimensions and size. Click to switch between fit and actual size.
+- **Laravel and Blade**: `.blade.php` files get Blade highlighting (`{{ }}`, `{!! !!}`, comments and `@directives`), directive snippets after `@`, and PHP completion inside echoes and directives. In a Laravel project, `view('…')`, `@include('…')`, `route('…')`, `config('…')` and `env('…')` complete the names of your views, routes, config keys and `.env` keys.
 - **Never lose work**: unsaved changes are kept as a draft in your browser and offered back if the page reloads, crashes or the session expires.
 - **No silent overwrites**: before saving, the editor checks whether someone else changed the file on the server and shows you both versions side by side if they did.
 - **Review before saving**: compare your changes with the server's version at any time.
@@ -101,7 +109,37 @@ The **explorer** on the left starts at your home folder, with the folder of the 
 
 Right-click a file or folder in the explorer (or press `Shift+F10`) for **New file**, **New folder**, **Rename** (`F2`), **Move to trash** (`Delete`) and **Copy path**. The two buttons next to the folder name create a file or folder inside the folder you last selected.
 
+The same menu has:
+
+- **Cut**, **Copy** and **Paste** (`Ctrl+X`, `Ctrl+C`, `Ctrl+V` in the explorer) and **Duplicate**. Pasting where the name is taken asks for a new name. You can also drag a file or folder onto another folder to move it; the editor asks before moving. Open tabs follow a moved file.
+- **Permissions** changes the mode (for example `644` for files, `755` for folders).
+- **Compress** makes a `.zip`, `.tar.gz`, `.tar.bz2` or `.tar` next to the file or folder, depending on the name you give it. **Extract here** unpacks an archive into its own folder.
+- **Upload files** and **Upload folder** send files from your computer into that folder, and so does dropping files or folders on it. A dropped folder is recreated with everything inside it, up to 2,000 files at a time. Existing files are replaced, and existing folders merged into, only after you confirm.
+- `Ctrl+click` adds a row to the selection and `Shift+click` selects a range. Cut, copy, drag, compress and move to trash then apply to everything selected; `Esc` clears the selection.
+- **Download** saves a file to your computer.
+
 **Move to trash** uses cPanel's trash, not permanent deletion: you can get files back from File Manager with **View Trash**. If you trash a file that's open with unsaved changes, its tab stays open, and saving creates the file again.
+
+### Split editor and previews
+
+- **Split** in the toolbar (`Ctrl+\`) opens the current file in a second pane on the right. Switch the left pane to another tab to see two files side by side, or right-click a file or a tab and choose **Open to the side**. Both panes edit the same text when they show the same file, and `Ctrl+S` saves the pane you used last. Drag the divider to resize.
+- **Preview** (`Ctrl+Shift+V`) appears for Markdown and SVG files and shows the rendered result beside the source, updating as you type. Links to other files in the project open them in the editor. Pictures stored next to the file are shown; pictures on other websites are not, because the editor is blocked from the network. Raw HTML in Markdown is shown as text.
+- Image files open as a picture instead of text. Pictures over 25 MB aren't previewed.
+
+### Laravel
+
+Files ending in `.blade.php` open in **Blade** mode. Type `@` for directive snippets (`@foreach`, `@section`, `@can`…).
+
+When the file is inside a Laravel project (a folder with an `artisan` file), these complete as you type inside the quotes:
+
+| Inside | Suggests |
+| --- | --- |
+| `view('…')`, `@include('…')`, `@extends('…')`, `@component('…')` | Views in `resources/views`, in dot notation |
+| `route('…')`, `to_route('…')` | Names from `->name('…')` and `Route::resource()` in `routes/*.php` |
+| `config('…')` | Keys from `config/*.php`, such as `app.name` |
+| `env('…')` | Keys from `.env.example` and `.env` (names only, never values) |
+
+Route names built from a group prefix (`->name('admin.')` on a group) are listed without the prefix. Turn this off with **Laravel › Name Completion** in Settings.
 
 ### Find in files
 
@@ -109,6 +147,7 @@ Press `Ctrl+Shift+F` (or click **Search** above the explorer) and type. Click a 
 
 - **Aa**, **ab** and **.\*** toggle match case, whole word and regular expressions.
 - **Files to include** takes a comma-separated list. Text like `wp-content/themes` matches anywhere in the path, and patterns like `*.php` or `inc/**/*.js` match file names.
+- **Replace**: type the new text in the **Replace** box. Each result shows the match struck out and the replacement after it. Click a result to see the whole file before and after, with **Replace in this file**. The button next to the box (or `Enter`) replaces in every listed file, after asking. Files that are open are changed in the editor and left for you to save; the others are saved to the server at once, and the version from before is kept in each file's **History**. In regular expression mode, `$1` and `$&` insert parts of the match.
 - cPanel can't search on the server, so the first search downloads each file once (up to 1 MB each, 5,000 files) and keeps it in memory for later searches. **Refresh** in the explorer clears that cache. Open tabs are searched as you've edited them, saved or not.
 
 ### Drafts, conflicts and history
@@ -149,13 +188,18 @@ Most VS Code shortcuts work. The most useful ones:
 | --- | --- |
 | `Ctrl+S` | Save the current tab |
 | `Ctrl+,` | Open Settings |
-| `Ctrl+P` | Go to file (add `:line` to jump to a line) |
+| `Ctrl+P` | Go to file (add `:line` to jump to a line, or start with `#` to find a class or function) |
+| `F12` / `Ctrl+Click` | Go to definition (PHP) |
+| `Ctrl+Shift+O` | Go to a class or function in this file (PHP) |
 | `Ctrl+B` | Show/hide the explorer |
+| `Ctrl+\` | Split the editor, or close the side pane |
+| `Ctrl+Shift+V` | Preview a Markdown or SVG file to the side |
 | `Alt+W` | Close the current tab |
 | `Alt+PageUp` / `Alt+PageDown` | Previous / next tab |
 | `Alt+1` … `Alt+9` | Go to tab 1…8, or the last tab |
 | `Ctrl+Shift+F` | Find in files |
 | `F2` / `Delete` | Rename / move to trash (in the explorer) |
+| `Ctrl+X` / `Ctrl+C` / `Ctrl+V` | Cut / copy / paste a file or folder (in the explorer) |
 | `F1` / `Ctrl+Shift+P` | Command palette |
 | `Ctrl+F` / `Ctrl+H` | Find / Replace |
 | `Ctrl+D` | Select next occurrence |
@@ -205,7 +249,7 @@ These are converted to UTF-8 for editing and back to their original encoding on 
 Every claim below can be checked in the source. None of it relies on trusting us.
 
 - **The editor is blocked from the network by the browser.** `manifest.json` gives the editor page a strict Content Security Policy (`default-src 'none'; connect-src 'none'; …`). It can only load files packaged inside the extension, and Chrome refuses any request it tries to make to a server.
-- **Your files only go to your own server.** `content.js` lists, loads and saves through cPanel's own API (`Fileman::list_files`, `Fileman::get_file_content` and `Fileman::save_file_content`, plus API 2's `Fileman::mkdir` and `Fileman::fileop` for new folders, renaming and moving to trash) on the server you're already on, using the session you're already logged in with. You can confirm this in DevTools → Network.
+- **Your files only go to your own server.** `content.js` lists, loads and saves through cPanel's own API (`Fileman::list_files`, `Fileman::get_file_content`, `Fileman::save_file_content` and `Fileman::upload_files`, plus API 2's `Fileman::mkdir` and `Fileman::fileop` for new folders, renaming, copying, moving, permissions, archives and the trash, and cPanel's `/download` address for image previews and downloads) on the server you're already on, using the session you're already logged in with. You can confirm this in DevTools → Network.
 - **No background script, no analytics, no remote code.** Monaco and Emmet are bundled inside the extension rather than loaded from a CDN.
 - **No extra permissions.** The extension doesn't request access to tabs, cookies, history, downloads or storage. (Drafts and history use the standard storage every web page has, which needs no permission.)
   - Chrome's install prompt may say it can "read and change your data on all websites". That's because cPanel can run on any domain, so the match pattern can't be limited to one host. The script only activates on URLs matching `*/cpsess*/frontend/*/filemanager/editit.html*`.
@@ -243,6 +287,10 @@ cp-monaco/
 │   ├── editor.js         tabs, explorer, Go to file, themes
 │   ├── editor.css
 │   ├── themes.js         theme definitions (add your own here)
+│   ├── markdown.js       Markdown renderer for the preview pane (builds DOM, never parses HTML)
+│   ├── blade.js          Blade language: highlighting on top of Monaco's PHP grammar, directive snippets
+│   ├── laravel.js        view, route, config and env name completion for Laravel projects
+│   ├── wordpress.js      loads data/wp-stubs.js for WordPress sites; hook name completion
 │   ├── settings.js       the list of settings, defaults and where values are stored
 │   ├── settings-ui.js    the Settings page
 │   ├── data/php-stubs.js  PHP built-in functions, classes and constants with docs (generated)
@@ -262,6 +310,7 @@ cp-monaco/
 
 - After editing any file in `extension/`, click the **reload** icon on the extension's card in `chrome://extensions`, then reload the cPanel tab.
 - The PHP documentation in `extension/data/php-stubs.js` is generated from [JetBrains' phpstorm-stubs](https://github.com/JetBrains/phpstorm-stubs) (Apache License 2.0) by `npm run build:stubs`. The result is committed, so normal builds don't need the network; run it only to update the stubs or change which extensions are included (`EXTENSIONS` in `scripts/build-php-stubs.js`).
+- The WordPress data in `extension/data/wp-stubs.js` is generated by `npm run build:wp-stubs` from [php-stubs/wordpress-stubs](https://github.com/php-stubs/wordpress-stubs) and [@wp-hooks/wordpress-core](https://github.com/wp-hooks/wordpress-core), and committed like the PHP stubs.
 - To update Monaco, change the `monaco-editor` version in `package.json` and run `npm install`. The extension uses Monaco's AMD build (`min/vs`).
 - File icons come from [`material-icon-theme`](https://github.com/material-extensions/vscode-material-icon-theme). `npm install` copies its SVGs to `extension/monaco/file-icons/` and turns its name-to-icon tables into `icons.js` (the editor's CSP doesn't allow `fetch`, even for its own files).
 - Prettier and its PHP plugin ([`prettier`](https://prettier.io), [`@prettier/plugin-php`](https://github.com/prettier/plugin-php)) are copied to `extension/monaco/prettier/` and only loaded inside `format-worker.js` the first time you format a file.
@@ -278,6 +327,20 @@ cp-monaco/
 - To make a zip by hand, zip the `extension` folder **after** running `npm install`, so it includes `monaco/`.
 
 ## What's new
+
+**2.0.0**
+- Split editor, with **Open to the side** for files and tabs.
+- Live Markdown and SVG preview, and image preview.
+- Laravel: Blade highlighting and directive snippets, PHP completion inside Blade, and completion of view, route, config and env names.
+- Upload (button, menu or drag and drop) and download.
+- Copy, cut, paste, duplicate, drag-and-drop move, permissions, compress and extract in the explorer.
+- Go to definition, an outline of the current file, and `#` in Go to file to find any class or function.
+- PHP syntax errors are underlined as you type.
+- Replace in files, with a preview of every change.
+- WordPress functions, classes and hook names in WordPress sites.
+- Select several files in the explorer, and upload whole folders.
+- Indexing and searching now wait in a queue behind whatever you click.
+- Lighter on accounts with many files: opening the editor lists only the open file's project. The rest of the account is listed when you first use Go to file or Find in files, and background requests no longer crowd out opening and saving.
 
 **1.4.0**
 - PHP's built-in functions, classes and constants with documentation: completion, hover, and parameter hints while you type a call. The data (about 1 MB) loads once, while the browser is idle, the first time a PHP file opens, and can be turned off in Settings.
@@ -328,7 +391,7 @@ In plain terms:
 
 This summary is just for convenience. The [LICENSE](LICENSE) file is what legally applies.
 
-**Third-party code:** the extension bundles [Monaco Editor](https://github.com/microsoft/monaco-editor), © Microsoft Corporation, [emmet-monaco-es](https://github.com/troy351/emmet-monaco-es), [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) and [Prettier](https://prettier.io) with its [PHP plugin](https://github.com/prettier/plugin-php), all MIT-licensed, and PHP signatures and documentation derived from JetBrains' [phpstorm-stubs](https://github.com/JetBrains/phpstorm-stubs), licensed under the Apache License 2.0 (`extension/data/LICENSE-phpstorm-stubs.txt`). Their license files are copied into `extension/monaco/` by `npm install`, so they're included automatically when you zip the extension.
+**Third-party code:** the extension bundles [Monaco Editor](https://github.com/microsoft/monaco-editor), © Microsoft Corporation, [emmet-monaco-es](https://github.com/troy351/emmet-monaco-es), [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) and [Prettier](https://prettier.io) with its [PHP plugin](https://github.com/prettier/plugin-php), all MIT-licensed, and PHP signatures and documentation derived from JetBrains' [phpstorm-stubs](https://github.com/JetBrains/phpstorm-stubs), licensed under the Apache License 2.0 (`extension/data/LICENSE-phpstorm-stubs.txt`). The WordPress data file (`extension/data/wp-stubs.js`) is derived from WordPress (GPL-2.0-or-later) and @wp-hooks/wordpress-core (GPL-3.0-or-later) and is distributed under those licenses, not MIT (`extension/data/LICENSE-wordpress.txt`). Their license files are copied into `extension/monaco/` by `npm install`, so they're included automatically when you zip the extension.
 
 ## Credits
 

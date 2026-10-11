@@ -6,12 +6,16 @@
 
   const MAX_FILES = 800;
   const MAX_FILE_SIZE = 300 * 1024;
-  const CONCURRENCY = 3;
+  const CONCURRENCY = 2;
   const SKIP_PATH = /\/(tests?|migrations|seeders|storage|node_modules|\.git|bootstrap\/cache|resources\/views|lang)\//i;
 
-  const files = new Map(); // path -> { size, mtime, classes }
+  const files = new Map(); // path -> { size, mtime, classes, fns, consts }
   let byFqn = new Map();
   let byName = new Map();
+  let fnByName = new Map();
+  let constByName = new Map();
+  let fnList = [];
+  let symbolList = null;
   let version = 0;
 
   const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -19,7 +23,20 @@
   function rebuild() {
     byFqn = new Map();
     byName = new Map();
+    fnByName = new Map();
+    constByName = new Map();
+    fnList = [];
+    symbolList = null;
     for (const [path, entry] of files) {
+      for (const fn of entry.fns || []) {
+        fn.file = path;
+        fnList.push(fn);
+        if (!fnByName.has(fn.n.toLowerCase())) fnByName.set(fn.n.toLowerCase(), fn);
+      }
+      for (const constant of entry.consts || []) {
+        constant.file = path;
+        if (!constByName.has(constant.n)) constByName.set(constant.n, constant);
+      }
       for (const cls of entry.classes) {
         cls.file = path;
         byFqn.set(cls.f.toLowerCase(), cls);
@@ -70,15 +87,18 @@
 
   function add(path, size, mtime, text) {
     let classes = [];
+    let fns = [];
+    let consts = [];
     try {
-      classes = window.CPM_PHP_SYMBOLS.parse(text).classes.map((cls) => {
-        const { r, ...rest } = cls;
-        return rest;
-      });
+      const scan = window.CPM_PHP_SYMBOLS.parse(text);
+      // Body offsets and end lines only matter for the file being edited; leave them out.
+      classes = scan.classes.map(({ r, e, ...cls }) => ({ ...cls, m: cls.m.map(({ e: end, ...member }) => member) }));
+      fns = scan.functions.map(({ e, ...fn }) => fn);
+      consts = scan.constants;
     } catch {
       // A file the scanner can't make sense of simply contributes nothing.
     }
-    files.set(path, { size, mtime, classes });
+    files.set(path, { size, mtime, classes, fns, consts });
   }
 
   function update(path, text) {
@@ -113,7 +133,7 @@
           const { content } = await read(item.path);
           add(item.path, item.size, item.mtime, content);
         } catch {
-          files.set(item.path, { size: item.size, mtime: item.mtime, classes: [] });
+          files.set(item.path, { size: item.size, mtime: item.mtime, classes: [], fns: [], consts: [] });
         }
         done++;
         sinceSave++;
@@ -143,13 +163,29 @@
   }
 
   function serialize() {
-    return [...files].map(([path, entry]) => [path, entry.size, entry.mtime, entry.classes]);
+    return [...files].map(([path, entry]) => [path, entry.size, entry.mtime, entry.classes, entry.fns, entry.consts]);
   }
 
   function restore(rows) {
     files.clear();
-    for (const [path, size, mtime, classes] of rows || []) files.set(path, { size, mtime, classes });
+    for (const [path, size, mtime, classes, fns, consts] of rows || []) files.set(path, { size, mtime, classes, fns: fns || [], consts: consts || [] });
     rebuild();
+  }
+
+  // Every class, method and function with where it is declared, for "Go to symbol".
+  function symbols() {
+    if (symbolList) return symbolList;
+    symbolList = [];
+    for (const [path, entry] of files) {
+      for (const cls of entry.classes) {
+        symbolList.push({ name: cls.n, kind: cls.k, file: path, line: cls.l || 1 });
+        for (const member of cls.m) {
+          if (member.k === 'm' && member.l) symbolList.push({ name: `${cls.n}::${member.n}`, word: member.n, kind: 'method', file: path, line: member.l });
+        }
+      }
+      for (const fn of entry.fns || []) symbolList.push({ name: fn.n, kind: 'function', file: path, line: fn.l });
+    }
+    return symbolList;
   }
 
   window.CPM_PHP_INDEX = {
@@ -159,6 +195,10 @@
     update,
     serialize,
     restore,
+    symbols,
+    fn: (name) => fnByName.get(name.replace(/^\\/, '').split('\\').pop().toLowerCase()) || null,
+    constant: (name) => constByName.get(name) || null,
+    functions: () => fnList,
     get size() { return files.size; },
     get version() { return version; },
     all: () => [...byFqn.values()],

@@ -437,4 +437,6 @@ function main() {
   if (temp) fs.rmSync(temp, { recursive: true, force: true });
 }
 
-main();
+// Also used by build-wp-stubs.js, which reads WordPress's stubs in the same format.
+module.exports = { parseFile };
+if (require.main === module) main();

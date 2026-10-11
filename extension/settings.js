@@ -37,6 +37,8 @@
       label: 'Features',
       children: [
         { id: 'features.php', label: 'PHP' },
+        { id: 'features.laravel', label: 'Laravel' },
+        { id: 'features.wordpress', label: 'WordPress' },
         { id: 'features.emmet', label: 'Emmet' },
       ],
     },
@@ -111,7 +113,10 @@
     { key: 'php.index.enabled', group: 'features.php', category: 'PHP', name: 'Index: Enabled', type: 'boolean', default: true, description: 'Read your project\'s PHP files in the background to complete classes, methods and properties across files. Only class and method names are kept, never file contents.' },
     { key: 'php.builtins.enabled', group: 'features.php', category: 'PHP', name: 'Built-in Docs: Enabled', type: 'boolean', default: true, description: 'Complete PHP\'s own functions, classes and constants, show their documentation on hover, and show parameter hints while you type a call. Loads about 1 MB of bundled data the first time you open a PHP file.' },
     { key: 'php.format.phpVersion', group: 'features.php', category: 'PHP', name: 'Format: PHP Version', type: 'enum', default: 'auto', options: enumOf(['auto', 'Detect from the file'], ['7.4', '7.4'], ['8.0', '8.0'], ['8.1', '8.1'], ['8.2', '8.2'], ['8.3', '8.3']), description: 'The PHP version the formatter writes for. "Detect" assumes PHP 8 only when the file already uses PHP 8 syntax, so older servers keep working.' },
-    { key: 'emmet.enabled', group: 'features.emmet', category: 'Emmet', name: 'Enabled', type: 'boolean', default: true, description: 'Offer Emmet abbreviations (`ul>li*3`, `.card`, `m10`) in HTML, PHP, CSS, SCSS and Less files. `Tab` or `Enter` expands them.' },
+    { key: 'php.validate.enabled', group: 'features.php', category: 'PHP', name: 'Validate: Enabled', type: 'boolean', default: true, description: 'Underline PHP syntax errors as you type. The check runs in the background in your browser. Syntax newer than the checker knows can be flagged by mistake; turn this off if that gets in your way.' },
+    { key: 'wordpress.support', group: 'features.wordpress', category: 'WordPress', name: 'Functions And Hooks', type: 'enum', default: 'auto', options: enumOf(['auto', 'In WordPress sites'], ['on', 'Always'], ['off', 'Never']), description: 'Complete WordPress\'s functions and classes, show their documentation, and complete hook names inside `add_action()` and `add_filter()`. Loads about 1.7 MB of bundled data the first time you open a PHP file in a WordPress site. Needs **PHP › Built-in Docs**.' },
+    { key: 'laravel.enabled', group: 'features.laravel', category: 'Laravel', name: 'Name Completion: Enabled', type: 'boolean', default: true, description: 'In a Laravel project, complete view names in `view()` and `@include()`, route names in `route()`, config keys in `config()` and `.env` keys in `env()`. Reads `routes/`, `config/` and `.env.example` once per visit and keeps only the names.' },
+    { key: 'emmet.enabled', group: 'features.emmet', category: 'Emmet', name: 'Enabled', type: 'boolean', default: true, description: 'Offer Emmet abbreviations (`ul>li*3`, `.card`, `m10`) in HTML, PHP, Blade, CSS, SCSS and Less files. `Tab` or `Enter` expands them.' },
   ];
 
   const byKey = new Map(SCHEMA.map((def) => [def.key, def]));

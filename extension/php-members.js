@@ -281,9 +281,11 @@
   const PHP_WORD = /^[\\\w$]+$/;
   const CHAIN = /((?:\$\w+|[\\\w]+)(?:(?:->|\?->|::)\w+(?:\((?:[^()]|\([^()]*\))*\))?)*)(->|\?->|::)$/;
 
-  function inPhpBlock(text) {
+  function inPhpBlock(text, model) {
     const open = Math.max(text.lastIndexOf('<?php'), text.lastIndexOf('<?='), text.lastIndexOf('<?\n'));
-    return open !== -1 && open > text.lastIndexOf('?>');
+    if (open !== -1 && open > text.lastIndexOf('?>')) return true;
+    // In a Blade template, echoes, @php blocks and directive arguments are PHP too.
+    return model.getLanguageId() === 'blade' && Boolean(window.CPM_BLADE?.inCode(text));
   }
 
   // What the mouse is over: a member, a function, a class, a constant or a variable.
@@ -294,7 +296,7 @@
     const before = line.slice(0, word.startColumn - 1);
     const after = line.slice(word.endColumn - 1);
     const upTo = model.getValueInRange({ startLineNumber: Math.max(1, position.lineNumber - 200), startColumn: 1, endLineNumber: position.lineNumber, endColumn: word.startColumn });
-    if (!inPhpBlock(upTo)) return null;
+    if (!inPhpBlock(upTo, model)) return null;
 
     const docs = window.CPM_PHP_DOCS;
     const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn };
@@ -327,9 +329,11 @@
     }
 
     // function call
-    if (/^\s*\(/.test(after) && docs && docs.ready()) {
-      const found = docs.fn(word.word);
+    if (/^\s*\(/.test(after)) {
+      const found = docs && docs.ready() ? docs.fn(word.word) : null;
       if (found) return reply(docs.functionMarkdown(found.name, found.entry));
+      const own = index().fn(word.word);
+      if (own) return reply(`\`\`\`php\nfunction ${own.n}(${own.sig || ''})${own.t ? `: ${own.t}` : ''}\n\`\`\`\n\nDefined in \`${own.file}\``);
     }
 
     // class name (also after new, extends, instanceof, :: ...)
@@ -351,6 +355,83 @@
       if (value !== null) return reply(`\`\`\`php\nconst ${word.word}${value ? ` = ${value}` : ''}\n\`\`\``);
     }
     return null;
+  }
+
+  // ---- Go to definition and the outline ----
+
+  // Where the name under the cursor is declared: { path, line, word }. `path` is '' for the
+  // file being edited. Built-in PHP names have no file to go to.
+  function definition(model, position) {
+    const word = model.getWordAtPosition(position);
+    if (!word || !PHP_WORD.test(word.word)) return null;
+    const line = model.getLineContent(position.lineNumber);
+    const before = line.slice(0, word.startColumn - 1);
+    const after = line.slice(word.endColumn - 1);
+    const upTo = model.getValueInRange({ startLineNumber: Math.max(1, position.lineNumber - 200), startColumn: 1, endLineNumber: position.lineNumber, endColumn: word.startColumn });
+    if (!inPhpBlock(upTo, model)) return null;
+    const doc = parsed(model);
+    const offset = model.getOffsetAt(position);
+    const name = word.word.replace(/^\$/, '');
+    const local = (cls) => doc.classes.find((c) => c.f.toLowerCase() === cls.f.toLowerCase());
+    const where = (cls, target, text) => {
+      if (!cls || cls.stub || !target) return null;
+      return { path: local(cls) ? '' : cls.file || '', line: target, word: text };
+    };
+
+    const chain = CHAIN.exec(before.slice(-300));
+    if (chain) {
+      const cls = resolveExpression(chain[1], { text: model.getValue(), offset, doc, current: classAt(doc, offset) });
+      const item = cls && index().members(cls, doc.classes).find((m) => m.n === name);
+      if (!item) return null;
+      const owner = doc.classes.find((c) => c.f === item.fromFqn) || index().find(`\\${item.fromFqn}`);
+      return where(owner, item.l || (owner && owner.l), name);
+    }
+    if (word.word.startsWith('$') || /\bfunction\s+$/.test(before)) return null;
+
+    if (/^\s*\(/.test(after) && !/\bnew\s+$/.test(before)) {
+      const own = doc.functions.find((fn) => fn.n.toLowerCase() === name.toLowerCase());
+      if (own) return { path: '', line: own.l, word: own.n };
+      const fn = index().fn(name);
+      if (fn) return { path: fn.file, line: fn.l, word: fn.n };
+    }
+    if (/^[A-Z\\]/.test(word.word) || /\bnew\s+$/.test(before)) {
+      const cls = classNamed(word.word, doc);
+      const found = cls && where(local(cls) || cls, (local(cls) || cls).l, cls.n);
+      if (found) return found;
+    }
+    const constant = doc.constants.find((c) => c.n === word.word);
+    if (constant) return { path: '', line: constant.l, word: constant.n };
+    const defined = index().constant(word.word);
+    return defined ? { path: defined.file, line: defined.l, word: defined.n } : null;
+  }
+
+  // The classes, members and functions of a file, for Go to Symbol in Editor and sticky scroll.
+  function outline(model, monaco) {
+    const Kind = monaco.languages.SymbolKind;
+    const doc = parsed(model);
+    const last = model.getLineCount();
+    const symbol = (name, kind, from, to, detail = '', children = []) => {
+      const start = Math.min(Math.max(from || 1, 1), last);
+      const end = Math.min(Math.max(to || start, start), last);
+      return {
+        name,
+        detail,
+        kind,
+        tags: [],
+        range: { startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: model.getLineMaxColumn(end) },
+        selectionRange: { startLineNumber: start, startColumn: 1, endLineNumber: start, endColumn: model.getLineMaxColumn(start) },
+        children,
+      };
+    };
+    const memberKinds = { m: Kind.Method, p: Kind.Property, c: Kind.Constant, e: Kind.EnumMember };
+    const classKinds = { interface: Kind.Interface, enum: Kind.Enum, trait: Kind.Class, class: Kind.Class };
+    return [
+      ...doc.classes.map((cls) => symbol(cls.n, classKinds[cls.k], cls.l, cls.e, cls.k, cls.m
+        .filter((member) => member.l)
+        .map((member) => symbol(member.k === 'p' ? `$${member.n}` : member.n, memberKinds[member.k], member.l, member.e, member.k === 'm' ? `(${member.sig || ''})` : ''))
+        .sort((a, b) => a.range.startLineNumber - b.range.startLineNumber))),
+      ...doc.functions.map((fn) => symbol(fn.n, Kind.Function, fn.l, fn.e, `(${fn.sig})`)),
+    ].sort((a, b) => a.range.startLineNumber - b.range.startLineNumber);
   }
 
   // ---- Parameter hints: which argument of which call is being typed ----
@@ -386,7 +467,7 @@
     const start = Math.max(0, offset - 4000);
     const from = model.getPositionAt(start);
     const chunk = model.getValueInRange({ startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: position.lineNumber, endColumn: position.column });
-    if (!inPhpBlock(model.getValueInRange({ startLineNumber: 1, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column }))) return null;
+    if (!inPhpBlock(model.getValueInRange({ startLineNumber: 1, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column }), model)) return null;
     const call = openCall(chunk);
     if (!call) return null;
 
@@ -427,7 +508,9 @@
         paramDocs = found.entry.p || [];
       } else {
         const own = new RegExp(`function\\s+${chain.replace(/\\/g, '')}\\s*\\(((?:[^()]|\\([^()]*\\))*)\\)(?:\\s*:\\s*([\\w\\\\|?]+))?`).exec(model.getValue());
+        const project = own ? null : index().fn(chain);
         if (own) signature = { name: chain, sig: own[1].replace(/\s+/g, ' ').trim(), ret: own[2] || '' };
+        else if (project) signature = { name: project.n, sig: project.sig || '', ret: project.t || '' };
       }
     }
     if (!signature) return null;
@@ -453,5 +536,5 @@
     };
   }
 
-  window.CPM_PHP_MEMBERS = { init, member, classSuggestions, importSuggestions, parsed, resolveItem, hover, signatureHelp };
+  window.CPM_PHP_MEMBERS = { init, member, classSuggestions, importSuggestions, parsed, resolveItem, hover, signatureHelp, definition, outline };
 })();

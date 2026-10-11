@@ -5,6 +5,7 @@
   'use strict';
 
   const MAX_SIZE = 1.5 * 1024 * 1024;
+  const CHECK_MAX_SIZE = 500 * 1024;
   const TIME_LIMIT = 20000;
   const IDLE_LIMIT = 60000;
 
@@ -30,7 +31,7 @@
     pending.clear();
   }
 
-  function run(code, options) {
+  function run(code, options, check = false) {
     return new Promise((resolve) => {
       if (!worker) start();
       const id = nextId++;
@@ -40,10 +41,16 @@
         pending.delete(id);
         resolve(result);
       });
-      worker.postMessage({ id, code, options });
+      worker.postMessage({ id, code, options, check });
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => { if (!pending.size) stop(); }, IDLE_LIMIT);
     });
+  }
+
+  // Resolves to { ok: true }, or { ok: false, message, line, column } for the first syntax error.
+  function check(code) {
+    if (code.length > CHECK_MAX_SIZE) return Promise.resolve({ ok: true });
+    return run(code, null, true).then((result) => (result.ok ? result : { ...result, message: String(result.message).replace(/ on line \d+$/, '') }));
   }
 
   // Newer syntax means the server already runs PHP 8, so modern output (trailing commas in
@@ -105,5 +112,5 @@
     });
   }
 
-  window.CPM_FORMAT = { register, phpVersionFor };
+  window.CPM_FORMAT = { register, phpVersionFor, check };
 })();
