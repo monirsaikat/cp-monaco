@@ -38,6 +38,8 @@
     <symbol id="i-split" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M12 4v16" /></symbol>
     <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></symbol>
     <symbol id="i-replace" viewBox="0 0 24 24"><path d="M4 6h11a4 4 0 0 1 0 8H8" /><path d="M11 11l-3 3 3 3" /></symbol>
+    <symbol id="i-outline" viewBox="0 0 24 24"><path d="M4 6h10M8 12h12M8 18h8M4 10v8" /></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></symbol>
     <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M6 10l6-6 6 6M4 20h16" /></symbol>
   </svg>
 
@@ -80,6 +82,9 @@
         <svg class="icon"><use href="#i-history" /></svg>
         <span class="label">History</span>
       </button>
+      <button id="open-web" type="button" class="icon-btn" title="Open this file's address in a new browser tab" aria-label="Open in browser" disabled>
+        <svg class="icon"><use href="#i-globe" /></svg>
+      </button>
       <button id="settings-btn" type="button" class="icon-btn" title="Settings (Ctrl+,)" aria-label="Settings">
         <svg class="icon"><use href="#i-gear" /></svg>
       </button>
@@ -117,6 +122,10 @@
         <button id="view-search" type="button" role="tab" aria-selected="false" aria-controls="search-view" title="Find in files (Ctrl+Shift+F)">
           <svg class="icon"><use href="#i-search" /></svg>
           Search
+        </button>
+        <button id="view-outline" type="button" role="tab" aria-selected="false" aria-controls="outline-view" title="Outline of the current file">
+          <svg class="icon"><use href="#i-outline" /></svg>
+          Outline
         </button>
         <span class="spacer"></span>
         <button id="quick-open-btn" type="button" class="icon-btn small" title="Go to file (Ctrl+P)" aria-label="Go to file">
@@ -167,6 +176,10 @@
         <p class="search-status" id="search-status"></p>
         <div class="search-results" id="search-results"></div>
       </div>
+
+      <div class="view" id="outline-view" role="tabpanel" aria-labelledby="view-outline" hidden>
+        <div class="file-tree outline" id="outline" role="tree" aria-label="Outline"></div>
+      </div>
     </aside>
     <div class="resizer" id="resizer" role="separator" aria-orientation="vertical" aria-label="Resize explorer"></div>
     <div class="workbench-main">
@@ -176,6 +189,7 @@
         <p id="notice-text"></p>
         <div class="notice-actions" id="notice-actions"></div>
       </div>
+      <nav class="crumbs" id="crumbs" aria-label="Breadcrumbs" hidden></nav>
       <div class="stage" id="stage">
         <div class="stage-main">
           <main id="editor"></main>
@@ -216,10 +230,32 @@
           </div>
         </section>
       </div>
+      <section class="panel" id="panel" aria-label="Panel" hidden>
+        <div class="panel-head">
+          <div class="panel-tabs" role="tablist" aria-label="Panel views">
+            <button id="panel-problems" type="button" role="tab" aria-selected="true" aria-controls="panel-body">Problems <span class="count" id="problems-count"></span></button>
+            <button id="panel-log" type="button" role="tab" aria-selected="false" aria-controls="panel-body">Error log</button>
+          </div>
+          <span class="panel-info" id="panel-info"></span>
+          <span class="spacer"></span>
+          <button id="log-clear" type="button" class="link danger" title="Empty the log file on the server" hidden>Empty log</button>
+          <button id="log-refresh" type="button" class="icon-btn small" title="Look for the log again and reload it" aria-label="Reload the error log" hidden>
+            <svg class="icon"><use href="#i-refresh" /></svg>
+          </button>
+          <button id="panel-close" type="button" class="icon-btn small" title="Close panel (Ctrl+J)" aria-label="Close panel">
+            <svg class="icon"><use href="#i-x" /></svg>
+          </button>
+        </div>
+        <div class="panel-body" id="panel-body" role="tabpanel"></div>
+      </section>
     </div>
   </div>
 
   <footer class="app-status">
+    <button id="problems-status" type="button" class="status-btn" title="Problems and the PHP error log (Ctrl+J)">
+      <svg class="icon"><use href="#i-alert" /></svg>
+      <span id="problems-total">0</span>
+    </button>
     <span id="message"></span>
     <span id="index-status" aria-live="polite"></span>
     <span class="spacer"></span>
@@ -305,7 +341,7 @@
           <div>
             <h3>Your files only go to your own server</h3>
             <p>Files are loaded and saved through your cPanel's own File Manager API, using the login you already have. No other server is involved.</p>
-            <p class="verify">Check it: open DevTools → Network. The only requests are to <code>/execute/Fileman</code>, <code>/json-api/cpanel</code> (File Manager functions) and <code>/download</code> (image previews and downloads) on your cPanel.</p>
+            <p class="verify">Check it: open DevTools → Network. The only requests are to <code>/execute/Fileman</code>, <code>/json-api/cpanel</code> (File Manager functions), <code>/execute/DomainInfo</code> (which folder belongs to which of your domains) and <code>/download</code> (image previews, downloads and the error log) on your cPanel.</p>
           </div>
         </li>
         <li>
@@ -320,7 +356,7 @@
           <svg class="icon"><use href="#i-check" /></svg>
           <div>
             <h3>No tracking, no remote code</h3>
-            <p>There's no analytics and no background script. Monaco and Emmet are bundled inside the extension instead of being loaded from a CDN.</p>
+            <p>There's no analytics. The only background script is a few lines that pass the optional close-tab shortcut on to the editor. Monaco and Emmet are bundled inside the extension instead of being loaded from a CDN.</p>
           </div>
         </li>
         <li>

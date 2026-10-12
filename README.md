@@ -24,6 +24,9 @@ Open any file in File Manager the way you normally do. Instead of cPanel's built
 - **Settings page like VS Code's** (`Ctrl+,` or the gear in the toolbar): search, a category tree, a bar beside every setting you've changed and a one-click reset. About 50 settings: font, cursor, tab size and indentation, word wrap, minimap, whitespace, suggestions, color theme, **Auto Save** (after a delay, when the editor loses focus, or when the window does), **Format On Save**, trim trailing whitespace, final newline, hidden files in the explorer, the PHP index and formatter version, and Emmet. Settings apply live. Use the **Server** tab to keep different settings for a particular cPanel server, and type `@modified` in the search box to see everything you've changed.
 - **PHP documentation built in**: completion for PHP's own functions (with parameter placeholders), classes and constants such as `PHP_EOL`; hover any function, method, class, constant or variable for its signature, a description, parameter notes and a link to the manual; **parameter hints** appear as you type a call and follow the argument you're on, for built-in functions, your own classes' methods and functions in the file. Built-in classes work everywhere the project index does, so `$date->`, `catch (Exception $e) { $e->` and a class that `extends Exception` all complete. After `new`, `extends`, `implements`, `instanceof` and `catch (` only classes are offered. Covers the core extensions most sites use (standard, SPL, date, json, mbstring, PDO, mysqli, curl, DOM, and more) for PHP 8.4.
 - **Go to definition** (`F12` or `Ctrl+Click`): jump to where a class, method, property, constant or function of your project is declared, in the same file or another one. `Ctrl+Shift+O` lists the classes and functions of the current file, and typing `#` in Go to file (`Ctrl+P`) finds a class, method or function anywhere in the project.
+- **Outline and breadcrumbs**: an **Outline** tab in the sidebar lists the classes, functions, rules or headings of the current file (PHP, JavaScript, TypeScript, CSS/SCSS/Less and Markdown) and follows the cursor. A breadcrumb bar above the editor shows the path to the file and the class and function you're in; click a folder to show it in the explorer, or a symbol to pick one of those beside it.
+- **Problems and the PHP error log** in a panel under the editor (`Ctrl+J`, or the warning count in the status bar). **Problems** lists every error and warning in the open files; click one to go there. **Error log** shows the end of the nearest `error_log` (or the file you name in Settings), newest first, with repeated messages folded into one line, and keeps itself up to date while it is open. Click an entry to open the file at the line that failed.
+- **Open in browser**: the globe button in the toolbar, or **Open in browser** in a tab's or file's menu, opens the address the file is served at, worked out from your account's domains and their folders.
 - **PHP syntax errors underlined** as you type, before a broken file reaches your live site.
 - **WordPress**: in a WordPress site, its functions and classes (`get_post_meta()`, `WP_Query`, `$wpdb->`…) complete with documentation and parameter hints, and hook names complete inside `add_action('…')`, `add_filter('…')`, `do_action('…')` and `apply_filters('…')`.
 - **Format PHP**: `Shift+Alt+F` formats the file with Prettier's PHP plugin, in a background thread so the editor never freezes. Syntax errors are reported with their line number and your file is left untouched.
@@ -45,7 +48,7 @@ Open any file in File Manager the way you normally do. Instead of cPanel's built
 - **Automatic language detection** from the file name: PHP, JavaScript, TypeScript, HTML, CSS/SCSS/Less, JSON, Markdown, YAML, XML, SQL, Python, shell, `.htaccess`, `.env` and more. You can switch manually from the dropdown.
 - **Saves straight to your server** with `Ctrl+S` / `Cmd+S`, using your existing cPanel login. The Save button shows a spinner while it works.
 - **Unsaved-changes protection**: a dot on each modified tab and next to the file name, a `●` in the browser tab title, a prompt before closing a modified tab, and a browser warning if you try to leave with unsaved work in any tab.
-- **12 themes plus "Match system"**: Light, Dark, GitHub Light/Dark, One Dark, Dracula, Monokai, Nord, Solarized Light/Dark, and high-contrast Light/Dark. The toolbar recolors to match, and your choice is remembered.
+- **16 themes plus "Match system"**: Light, Dark, GitHub Light/Dark, One Dark, Dracula, Monokai, Nord, Tokyo Night, Catppuccin Mocha, Gruvbox Dark, Night Owl, Solarized Light/Dark, and high-contrast Light/Dark. The toolbar recolors to match, and your choice is remembered.
 - **Word wrap** toggle, also remembered.
 - **Transparent about privacy**: a banner and a **Private** button in the status bar explain exactly what the extension can and can't do, and how to check each claim yourself.
 - **Escape hatch**: one click on **cPanel editor** brings back the original editor.
@@ -202,6 +205,7 @@ Most VS Code shortcuts work. The most useful ones:
 | `F12` / `Ctrl+Click` | Go to definition (PHP) |
 | `Ctrl+Shift+O` | Go to a class or function in this file (PHP) |
 | `Ctrl+B` | Show/hide the explorer |
+| `Ctrl+J` | Show/hide the panel (Problems and Error log) |
 | `Ctrl+\` | Split the editor, or close the side pane |
 | `Ctrl+Shift+V` | Preview a Markdown or SVG file to the side |
 | `Alt+W` | Close the current tab |
@@ -227,6 +231,8 @@ Most VS Code shortcuts work. The most useful ones:
 On macOS, use `Cmd` instead of `Ctrl` and `Option` instead of `Alt`.
 
 **Why `Alt+W` and not `Ctrl+W`?** Chrome keeps a few shortcuts for itself and never passes them to web pages or extensions: `Ctrl+W`, `Ctrl+T`, `Ctrl+N`, `Ctrl+Tab`, `Ctrl+Shift+T` and `Ctrl+PageUp/PageDown`. Pressing `Ctrl+W` therefore closes the browser tab, not the file. You get a warning first if anything is unsaved, and your open files come back next time. VS Code in the browser (vscode.dev) has the same limitation.
+
+**Making `Ctrl+W` close the file anyway.** The extension has a "Close the current editor tab" command with no key assigned. Open `chrome://extensions/shortcuts` (in Firefox: `about:addons` → gear icon → **Manage Extension Shortcuts**) and set it to `Ctrl+W`. From then on `Ctrl+W` closes the current file in the editor, and still closes the browser tab everywhere else and once no file is left open.
 
 ## Troubleshooting
 
@@ -261,8 +267,8 @@ The [privacy policy](PRIVACY.md) summarizes what the extension stores and sends.
 Every claim below can be checked in the source. None of it relies on trusting us.
 
 - **The editor is blocked from the network by the browser.** `manifest.json` gives the editor page a strict Content Security Policy (`default-src 'none'; connect-src 'none'; …`). It can only load files packaged inside the extension, and the browser refuses any request it tries to make to a server.
-- **Your files only go to your own server.** `content.js` lists, loads and saves through cPanel's own API (`Fileman::list_files`, `Fileman::get_file_content`, `Fileman::save_file_content` and `Fileman::upload_files`, plus API 2's `Fileman::mkdir` and `Fileman::fileop` for new folders, renaming, copying, moving, permissions, archives and the trash, and cPanel's `/download` address for image previews and downloads) on the server you're already on, using the session you're already logged in with. You can confirm this in DevTools → Network.
-- **No background script, no analytics, no remote code.** Monaco and Emmet are bundled inside the extension rather than loaded from a CDN.
+- **Your files only go to your own server.** `content.js` lists, loads and saves through cPanel's own API (`Fileman::list_files`, `Fileman::get_file_content`, `Fileman::save_file_content` and `Fileman::upload_files`, plus API 2's `Fileman::mkdir` and `Fileman::fileop` for new folders, renaming, copying, moving, permissions, archives and the trash, cPanel's `/download` address for image previews, downloads and the error log, and `DomainInfo::domains_data` to learn which folder belongs to which of your domains) on the server you're already on, using the session you're already logged in with. You can confirm this in DevTools → Network.
+- **No analytics, no remote code.** The only background script (`background.js`) is a few lines that pass the optional close-tab shortcut on to the editor. Monaco and Emmet are bundled inside the extension rather than loaded from a CDN.
 - **No extra permissions.** The extension doesn't request access to tabs, cookies, history, downloads or storage. (Drafts and history use the standard storage every web page has, which needs no permission.)
   - Chrome's install prompt may say it can "read and change your data on all websites". That's because cPanel can run on any domain, so the match pattern can't be limited to one host. The script only activates on URLs matching `*/cpsess*/frontend/*/filemanager/editit.html*`.
 - **Your settings**, the banner preference and the list of open tabs are stored locally in the browser.
@@ -339,6 +345,15 @@ cp-monaco/
 - To make a zip by hand, zip the `extension` folder **after** running `npm install`, so it includes `monaco/`.
 
 ## What's new
+
+**2.1.0**
+- A panel under the editor (`Ctrl+J`): **Problems** in the open files, and the **PHP error log**, kept up to date, with a click taking you to the line that failed.
+- **Open in browser** for any file or folder that belongs to one of your domains.
+- An **Outline** tab in the sidebar and **breadcrumbs** above the editor, for PHP, JavaScript, TypeScript, CSS/SCSS/Less and Markdown.
+- `Ctrl+W` can close the current file: bind the new "Close the current editor tab" command on your browser's extension shortcuts page.
+- Four more themes: Tokyo Night, Catppuccin Mocha, Gruvbox Dark and Night Owl.
+- Slim scrollbars in the style of VS Code.
+- Firefox support.
 
 **2.0.0**
 - Split editor, with **Open to the side** for files and tabs.

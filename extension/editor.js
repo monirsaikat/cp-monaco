@@ -99,6 +99,22 @@
     uploadFolderInput: $('upload-folder-input'),
     replaceInput: $('replace-input'),
     replaceAll: $('replace-all'),
+    viewOutline: $('view-outline'),
+    outlineView: $('outline-view'),
+    outline: $('outline'),
+    crumbs: $('crumbs'),
+    panel: $('panel'),
+    panelProblems: $('panel-problems'),
+    panelLog: $('panel-log'),
+    panelInfo: $('panel-info'),
+    panelBody: $('panel-body'),
+    panelClose: $('panel-close'),
+    problemsCount: $('problems-count'),
+    problemsStatus: $('problems-status'),
+    problemsTotal: $('problems-total'),
+    logClear: $('log-clear'),
+    logRefresh: $('log-refresh'),
+    openWeb: $('open-web'),
   };
 
   // Extensions Monaco doesn't map (or maps poorly) on its own.
@@ -144,8 +160,18 @@
   const INDEX_CONCURRENCY = 4;
   const QUICK_MAX_RESULTS = 60;
 
+  // Alt+W always works; this shows the key the close-tab command is bound to, if any.
+  let closeKey = 'Alt+W';
+  try {
+    chrome.commands.getAll((commands) => {
+      closeKey = commands?.find((command) => command.name === 'close-tab')?.shortcut || closeKey;
+    });
+  } catch {
+    // Keep the default.
+  }
+
   // Must match PROTOCOL in content.js.
-  const PROTOCOL = 4;
+  const PROTOCOL = 5;
   const DRAFT_DELAY = 800;
   const HISTORY_MAX = 20;
   const HISTORY_DAYS = 30;
@@ -159,6 +185,12 @@
   const SEARCH_CACHE_CHARS = 50 * 1024 * 1024;
   const UPLOAD_MAX_FILES = 2000;
   const UPLOAD_MAX_SIZE = 200 * 1024 * 1024;
+  // The error log panel reads only the end of the log, and reads it again this often (ms).
+  const LOG_TAIL_BYTES = 128 * 1024;
+  const LOG_MAX_ENTRIES = 300;
+  const LOG_POLL = 5000;
+  const LOG_NAME = /^(php[._-]?)?errors?[._-]?log$/i;
+  const LOG_PLACE = / in (\/.+?)(?: on line |:)(\d+)/;
   // Indexing, searching and other bulk work is sent a few requests at a time, and held back
   // while anything the user asked for is on its way (see request()).
   const BACKGROUND_MAX = 4;
@@ -212,6 +244,13 @@
   let selectAnchor = null;
   let dragged = null;
   let uploadDir = null;
+  // The active file's symbols, for the Outline view and the breadcrumbs. `chain` is the path
+  // of symbols around the cursor, outermost first.
+  // The panel under the editor: problems in the open files, or the end of the PHP error log.
+  // `log` is the file being shown ({ dir, file, size }); `rows` is what each line of the list does.
+  const panel = { timer: 0, log: null, text: null, entries: [], note: '', loading: false, rows: [] };
+  let domainList = null;
+  const outline = { symbols: [], tab: null, timer: 0, run: 0, collapsed: new Set(), chain: [], supported: false };
 
   setupThemePicker();
   applyTheme();
@@ -221,6 +260,8 @@
   setupFileOps();
   setupDragAndDrop();
   setupSearch();
+  setupOutline();
+  setupPanel();
   setupHistory();
   ui.wrap.setAttribute('aria-pressed', String(wrapMode() !== 'off'));
   darkQuery.addEventListener('change', () => {
@@ -303,6 +344,8 @@
     editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyZ, toggleWrap);
     editor.onDidChangeCursorPosition(updateCursor);
     editor.onDidChangeCursorSelection(updateCursor);
+    editor.onDidChangeCursorPosition(markOutline);
+    monaco.editor.onDidChangeMarkers(scheduleProblems);
 
     const languages = monaco.languages.getLanguages()
       .map((lang) => ({ id: lang.id, label: lang.aliases?.[0] || lang.id }))
@@ -312,6 +355,7 @@
     ui.language.addEventListener('change', () => {
       if (active && !active.image) monaco.editor.setModelLanguage(active.model, ui.language.value);
       if (active) scheduleLint(active);
+      scheduleOutline(0);
     });
     ui.wrap.addEventListener('click', toggleWrap);
     setupSettings();
@@ -360,6 +404,9 @@
         const tab = addTab(msg);
         activate(tab);
         restoreSession(previous, tab);
+        // Looked up now, so Open in browser can answer at once when it's clicked.
+        quiet(siteDomains());
+        if (!ui.panel.hidden) showPanel(prefs.panelView);
         break;
       }
       case 'error':
@@ -376,6 +423,16 @@
         pending.delete(msg.id);
         if (msg.ok) request.resolve(msg.data);
         else request.reject(new Error(msg.error));
+        break;
+      }
+      case 'close-tab': {
+        // The extension command, for those who bound it to Ctrl+W. With nothing left to
+        // close it falls through to the browser tab.
+        const busy = Boolean(document.querySelector('dialog[open]'));
+        const tab = active;
+        send({ type: 'close-tab', handled: busy || Boolean(tab) });
+        // After the reply, since closing an unsaved tab stops to ask first.
+        if (tab && !busy) setTimeout(() => closeTab(tab));
         break;
       }
     }
@@ -447,7 +504,7 @@
       const key = event.key.toLowerCase();
       return event.shiftKey
         ? { f: openSearch, p: openCommandPalette, v: active && canPreview(active) ? togglePreview : null }[key]
-        : { s: () => save(), p: openQuickOpen, b: toggleSidebar, ',': () => openSettings(), '\\': toggleSplit }[key];
+        : { s: () => save(), p: openQuickOpen, b: toggleSidebar, j: () => togglePanel(), ',': () => openSettings(), '\\': toggleSplit }[key];
     }
     // Chrome never passes Ctrl+W, Ctrl+Tab or Ctrl+PageUp/PageDown to a page, so tab
     // shortcuts use Alt. Matched by physical key, so Option works on a Mac as well.
@@ -509,6 +566,7 @@
       scheduleDraft(tab);
       scheduleAutoSave(tab);
       scheduleLint(tab);
+      if (tab === active) scheduleOutline();
       if (split.tab === tab && split.mode === 'preview') schedulePreview();
     });
     tabs.splice(append || !active ? tabs.length : tabs.indexOf(active) + 1, 0, tab);
@@ -591,7 +649,9 @@
         { label: 'Open to the side', run: () => openSide(tab) },
         ...(canPreview(tab) ? [{ label: 'Open preview to the side', run: () => openSide(tab, 'preview') }] : []),
         '-',
-        { label: 'Close', hint: 'Alt+W', run: () => closeTab(tab) },
+        { label: 'Open in browser', run: () => openInBrowser(tab.path) },
+        '-',
+        { label: 'Close', hint: closeKey, run: () => closeTab(tab) },
         { label: 'Close others', run: () => tabs.filter((t) => t !== tab).forEach(closeTab) },
         '-',
         { label: 'Copy path', run: () => copyText(tab.path) },
@@ -641,7 +701,7 @@
       close.type = 'button';
       close.className = 'tab-close';
       close.tabIndex = -1;
-      close.title = dirty ? 'Unsaved changes. Click to close (Alt+W).' : 'Close (Alt+W)';
+      close.title = dirty ? `Unsaved changes. Click to close (${closeKey}).` : `Close (${closeKey})`;
       close.setAttribute('aria-label', `Close ${tab.file}`);
       close.append(icon('i-x'));
       el.append(close);
@@ -687,6 +747,9 @@
     }
     updateCursor();
     refreshDirty();
+    scheduleOutline(0);
+    scheduleProblems();
+    ui.openWeb.disabled = !active;
   }
 
   function isDirty(tab) {
@@ -1792,6 +1855,8 @@
     if (diff.editor && changed('editor.font', 'editor.lineHeight')) diff.editor.updateOptions(diffFontOptions());
     if (changed('emmet.enabled')) applyEmmet();
     if (changed('explorer.showHiddenFiles')) renderTree();
+    if (changed('breadcrumbs.enabled')) renderCrumbs();
+    if (changed('php.errorLog.path') && !ui.panel.hidden && prefs.panelView === 'log') refreshLog(true);
     if (changed('php.builtins.enabled') && window.CPM_PHP_DOCS) {
       window.CPM_PHP_DOCS.setEnabled(settings.get('php.builtins.enabled'));
       if (settings.get('php.builtins.enabled') && active && /\.php$/i.test(active.file)) loadPhpDocs();
@@ -2562,6 +2627,7 @@
       { label: 'Compress…', run: () => compressEntries(items) },
       ...(isFile && ARCHIVE.test(name) ? [{ label: 'Extract here…', run: () => extractEntry(path) }] : []),
       '-',
+      { label: 'Open in browser', run: () => openInBrowser(path, !isFile) },
       { label: 'Copy path', run: () => copyText(path) },
     ];
   }
@@ -3448,6 +3514,7 @@
 
   function setupSearch() {
     ui.viewFiles.addEventListener('click', () => showView('files'));
+    ui.viewOutline.addEventListener('click', () => showView('outline'));
     ui.viewSearch.addEventListener('click', () => {
       showView('search');
       ui.searchInput.focus();
@@ -3496,11 +3563,627 @@
   }
 
   function showView(view) {
-    const isSearch = view === 'search';
-    ui.filesView.hidden = isSearch;
-    ui.searchView.hidden = !isSearch;
-    ui.viewFiles.setAttribute('aria-selected', String(!isSearch));
-    ui.viewSearch.setAttribute('aria-selected', String(isSearch));
+    const views = { files: [ui.viewFiles, ui.filesView], search: [ui.viewSearch, ui.searchView], outline: [ui.viewOutline, ui.outlineView] };
+    for (const [name, [tab, panel]] of Object.entries(views)) {
+      panel.hidden = name !== view;
+      tab.setAttribute('aria-selected', String(name === view));
+    }
+    if (view === 'outline') renderOutline();
+  }
+
+  // ---- Panel: problems and the PHP error log (Ctrl+J) ----
+
+  function setupPanel() {
+    ui.panelProblems.addEventListener('click', () => showPanel('problems'));
+    ui.panelLog.addEventListener('click', () => showPanel('log'));
+    ui.panelClose.addEventListener('click', () => togglePanel(false));
+    ui.problemsStatus.addEventListener('click', () => togglePanel());
+    ui.logRefresh.addEventListener('click', () => refreshLog(true));
+    ui.logClear.addEventListener('click', clearLog);
+    ui.openWeb.addEventListener('click', () => openInBrowser());
+    ui.panelBody.addEventListener('click', (event) => {
+      const row = event.target.closest('.panel-row');
+      panel.rows[Number(row?.dataset.index)]?.();
+    });
+    // Drag the panel's top edge to resize it.
+    const head = ui.panel.querySelector('.panel-head');
+    head.addEventListener('pointerdown', (event) => {
+      if (event.target.closest('button')) return;
+      event.preventDefault();
+      head.setPointerCapture(event.pointerId);
+      const from = event.clientY + prefs.panelHeight;
+      const drag = (e) => sizePanel(from - e.clientY);
+      const stop = () => {
+        head.removeEventListener('pointermove', drag);
+        head.removeEventListener('pointerup', stop);
+        head.removeEventListener('pointercancel', stop);
+        savePrefs();
+      };
+      head.addEventListener('pointermove', drag);
+      head.addEventListener('pointerup', stop);
+      head.addEventListener('pointercancel', stop);
+    });
+    sizePanel(prefs.panelHeight);
+    // The log grows while you reload your site in another tab, so keep it current.
+    setInterval(() => {
+      if (!ui.panel.hidden && prefs.panelView === 'log' && panel.log && document.visibilityState === 'visible') refreshLog();
+    }, LOG_POLL);
+    if (prefs.panel) {
+      ui.panel.hidden = false;
+      setPanelView(prefs.panelView);
+    }
+  }
+
+  function sizePanel(height) {
+    prefs.panelHeight = Math.round(Math.min(Math.max(height, 90), Math.max(90, innerHeight - 220)));
+    ui.panel.style.height = `${prefs.panelHeight}px`;
+  }
+
+  function togglePanel(open = ui.panel.hidden) {
+    if (open) return showPanel(prefs.panelView);
+    ui.panel.hidden = true;
+    prefs.panel = false;
+    savePrefs();
+    editor?.focus();
+  }
+
+  function setPanelView(view) {
+    const isLog = view === 'log';
+    prefs.panelView = isLog ? 'log' : 'problems';
+    ui.panelProblems.setAttribute('aria-selected', String(!isLog));
+    ui.panelLog.setAttribute('aria-selected', String(isLog));
+    ui.logRefresh.hidden = !isLog;
+  }
+
+  function showPanel(view) {
+    ui.panel.hidden = false;
+    prefs.panel = true;
+    setPanelView(view);
+    savePrefs();
+    renderPanel();
+    // The nearest log depends on the file being edited, so look again each time it is shown.
+    if (prefs.panelView === 'log') refreshLog(true);
+  }
+
+  function renderPanel() {
+    if (ui.panel.hidden) return;
+    if (prefs.panelView === 'log') renderLog();
+    else renderProblems();
+  }
+
+  function panelRow(index, kind, parts) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `panel-row ${kind}`;
+    row.dataset.index = index;
+    for (const [className, text] of parts) {
+      if (!text) continue;
+      const part = document.createElement('span');
+      part.className = className;
+      part.textContent = text;
+      row.append(part);
+    }
+    return row;
+  }
+
+  function panelNote(text, isError = false) {
+    const note = document.createElement('p');
+    note.className = `panel-note${isError ? ' error' : ''}`;
+    note.textContent = text;
+    return note;
+  }
+
+  function scheduleProblems() {
+    clearTimeout(panel.timer);
+    panel.timer = setTimeout(updateProblems, 150);
+  }
+
+  // Errors and warnings in every open file, worst first.
+  function problemGroups() {
+    if (!window.monaco) return [];
+    return tabs
+      .filter((tab) => !tab.image && !tab.model.isDisposed())
+      .map((tab) => ({
+        tab,
+        markers: monaco.editor.getModelMarkers({ resource: tab.model.uri })
+          .filter((marker) => marker.severity >= monaco.MarkerSeverity.Warning)
+          .sort((a, b) => b.severity - a.severity || a.startLineNumber - b.startLineNumber || a.startColumn - b.startColumn),
+      }))
+      .filter((group) => group.markers.length);
+  }
+
+  function updateProblems() {
+    const groups = problemGroups();
+    const all = groups.flatMap((group) => group.markers);
+    const errors = all.filter((marker) => marker.severity === monaco.MarkerSeverity.Error).length;
+    ui.problemsTotal.textContent = String(all.length);
+    ui.problemsCount.textContent = all.length ? String(all.length) : '';
+    ui.problemsStatus.classList.toggle('has-errors', errors > 0);
+    ui.problemsStatus.classList.toggle('has-warnings', !errors && all.length > 0);
+    if (!ui.panel.hidden && prefs.panelView === 'problems') renderProblems(groups);
+  }
+
+  function renderProblems(groups = problemGroups()) {
+    ui.logClear.hidden = true;
+    ui.panelInfo.textContent = '';
+    panel.rows = [];
+    const rows = [];
+    for (const { tab, markers } of groups) {
+      const head = panelRow(panel.rows.length, 'panel-file', [['', tab.file], ['dim', relativePath(tab.dir, rootDir)], ['badge', String(markers.length)]]);
+      head.prepend(fileIcon(tab.file));
+      panel.rows.push(() => activate(tab));
+      rows.push(head);
+      for (const marker of markers) {
+        const kind = marker.severity === monaco.MarkerSeverity.Error ? 'error' : 'warning';
+        const row = panelRow(panel.rows.length, kind, [['glyph', kind === 'error' ? '✕' : '▲'], ['text', marker.message], ['dim', marker.source], ['dim', `[Ln ${marker.startLineNumber}, Col ${marker.startColumn}]`]]);
+        row.title = marker.message;
+        panel.rows.push(() => {
+          if (tab !== active) activate(tab);
+          goToLine(marker.startLineNumber, marker.startColumn);
+        });
+        rows.push(row);
+      }
+    }
+    if (!rows.length) rows.push(panelNote(tabs.length ? 'No problems found in the open files.' : 'No file open.'));
+    ui.panelBody.replaceChildren(...rows);
+  }
+
+  // The log named in settings, else the nearest error_log above the file being edited, else
+  // a PHP error log in the account's logs folder.
+  async function findLog() {
+    const custom = settings.get('php.errorLog.path').trim();
+    if (custom && (custom.startsWith('/') || rootDir)) {
+      const path = custom.startsWith('/') ? custom : joinPath(rootDir, custom);
+      return { dir: parentOf(path), file: baseName(path), size: 0 };
+    }
+    if (!rootDir) return null;
+    const dirs = [];
+    for (let dir = active && isInside(active.path, rootDir) ? active.dir : rootDir; ; dir = parentOf(dir)) {
+      dirs.push(dir);
+      if (dir === rootDir || dir === '/') break;
+    }
+    dirs.push(joinPath(rootDir, 'logs'));
+    for (const dir of dirs) {
+      // Asked fresh: the log may have appeared since the explorer last read this folder.
+      const entries = await request({ op: 'list', dir }).catch(() => []);
+      const found = entries.find((entry) => entry.type === 'file' && entry.name === 'error_log')
+        || entries.find((entry) => entry.type === 'file' && LOG_NAME.test(entry.name));
+      if (found) return { dir, file: found.name, size: found.size };
+    }
+    return null;
+  }
+
+  async function refreshLog(locate = false) {
+    if (panel.loading) return;
+    panel.loading = true;
+    let failed = false;
+    try {
+      if (locate) {
+        const log = await findLog();
+        if (log?.dir !== panel.log?.dir || log?.file !== panel.log?.file) panel.text = null;
+        panel.log = log;
+      }
+      if (!panel.log) {
+        Object.assign(panel, { entries: [], text: null, note: 'No error log found. PHP writes error_log beside the script that failed; a different file can be set in Settings (PHP → Error Log: Path).' });
+      } else {
+        const { text, partial } = await request({ op: 'tail', dir: panel.log.dir, file: panel.log.file, limit: LOG_TAIL_BYTES, size: panel.log.size }, { background: !locate });
+        if (text !== panel.text) Object.assign(panel, { text, entries: parseLog(text, partial) });
+        panel.note = '';
+      }
+    } catch (err) {
+      failed = true;
+      Object.assign(panel, { entries: [], text: null, note: `Couldn't read ${panel.log ? joinPath(panel.log.dir, panel.log.file) : 'the error log'}: ${err.message}` });
+    } finally {
+      panel.loading = false;
+    }
+    if (!ui.panel.hidden && prefs.panelView === 'log') renderLog(failed);
+  }
+
+  // Newest first, with repeats of the same message folded into one line and a count.
+  function parseLog(text, partial) {
+    const lines = text.split(/\r?\n/);
+    // A tail usually starts in the middle of a line.
+    if (partial) lines.shift();
+    const raw = [];
+    for (const line of lines) {
+      const head = /^\[([^\]]+)\]\s?(.*)$/.exec(line);
+      if (head) raw.push({ time: head[1], message: head[2], detail: [] });
+      else if (line.trim() && raw.length) raw[raw.length - 1].detail.push(line);
+    }
+    const seen = new Map();
+    for (const item of raw.reverse()) {
+      const known = seen.get(item.message);
+      if (known) {
+        known.count++;
+        continue;
+      }
+      if (seen.size >= LOG_MAX_ENTRIES) break;
+      const level = /^PHP ([A-Za-z ]+?):\s+/.exec(item.message);
+      const where = LOG_PLACE.exec(item.message) || LOG_PLACE.exec(item.detail.join('\n'));
+      const message = level ? item.message.slice(level[0].length) : item.message;
+      seen.set(item.message, {
+        time: item.time,
+        level: level ? level[1] : '',
+        message: message.replace(/ in \/.+?(?: on line |:)\d+$/, ''),
+        full: [item.message, ...item.detail].join('\n'),
+        file: where ? where[1] : '',
+        line: where ? Number(where[2]) : 0,
+        count: 1,
+      });
+    }
+    return [...seen.values()];
+  }
+
+  function renderLog(failed = false) {
+    ui.logClear.hidden = !panel.log || !panel.entries.length;
+    ui.panelInfo.textContent = panel.log ? joinPath(panel.log.dir, panel.log.file) : '';
+    ui.panelInfo.title = ui.panelInfo.textContent;
+    panel.rows = [];
+    const rows = panel.entries.map((entry, index) => {
+      const kind = /fatal|parse|uncaught/i.test(`${entry.level} ${entry.message}`) ? 'error' : /warning/i.test(entry.level) ? 'warning' : 'info';
+      const row = panelRow(index, kind, [
+        ['glyph', kind === 'error' ? '✕' : kind === 'warning' ? '▲' : '•'],
+        ['dim', entry.level],
+        ['text', entry.message],
+        ['badge', entry.count > 1 ? `×${entry.count}` : ''],
+        ['dim', entry.file ? `${baseName(entry.file)}:${entry.line}` : ''],
+        ['dim', entry.time],
+      ]);
+      row.title = entry.full;
+      panel.rows.push(() => {
+        if (entry.file) openFile(parentOf(entry.file), baseName(entry.file), { line: entry.line });
+      });
+      return row;
+    });
+    if (!rows.length) rows.push(panelNote(panel.note || (panel.text === null ? 'Reading the error log…' : 'The error log is empty.'), failed));
+    ui.panelBody.replaceChildren(...rows);
+  }
+
+  async function clearLog() {
+    if (!panel.log) return;
+    const { dir, file } = panel.log;
+    const ok = await ask({
+      title: `Empty ${file}?`,
+      text: `Everything in ${joinPath(dir, file)} is removed from the server. This can't be undone.`,
+      confirm: 'Empty log',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await request({ op: 'write', dir, file, content: '', charset: 'utf-8' });
+    } catch (err) {
+      setMessage(`Couldn't empty ${file}: ${err.message}`, 'error');
+      return;
+    }
+    setMessage(`Emptied ${file}.`, 'ok');
+    refreshLog();
+  }
+
+  // ---- Open in browser ----
+
+  function siteDomains() {
+    domainList ||= request({ op: 'domains' }).catch((err) => {
+      domainList = null;
+      throw err;
+    });
+    return domainList;
+  }
+
+  // The address a file is served at: the domain whose folder it is in, plus the rest of the path.
+  async function openInBrowser(path = active?.path, isDir = false) {
+    if (!path) return;
+    let sites;
+    try {
+      sites = await siteDomains();
+    } catch (err) {
+      setMessage(`Couldn't look up this account's domains: ${err.message}`, 'error');
+      return;
+    }
+    const site = sites
+      .filter((item) => path === item.root || isInside(path, item.root))
+      .sort((a, b) => b.root.length - a.root.length)[0];
+    if (!site) {
+      setMessage(`${baseName(path)} isn't inside the folder of any of your domains, so it has no address.`, 'error');
+      return;
+    }
+    const rest = path === site.root ? '' : relativePath(path, site.root).split('/').map(encodeURIComponent).join('/');
+    const url = `https://${site.domain}/${rest}${isDir && rest ? '/' : ''}`.replace(/\/index\.(php|html?)$/i, '/');
+    window.open(url, '_blank', 'noopener');
+  }
+
+  // ---- Outline and breadcrumbs ----
+
+  const SYMBOL_GLYPHS = { class: 'C', interface: 'I', enum: 'E', method: 'm', function: 'ƒ', property: 'p', constant: 'c', variable: 'v', heading: '#', rule: '{}' };
+
+  function setupOutline() {
+    ui.outline.addEventListener('click', (event) => {
+      const row = event.target.closest('.row');
+      if (!row) return;
+      if (event.target.closest('.chevron') && row.hasAttribute('aria-expanded')) {
+        const { key } = row.dataset;
+        if (outline.collapsed.has(key)) outline.collapsed.delete(key);
+        else outline.collapsed.add(key);
+        renderOutline();
+        return;
+      }
+      goToLine(Number(row.dataset.line));
+    });
+    ui.outline.addEventListener('keydown', (event) => {
+      const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      const rows = [...ui.outline.querySelectorAll('.row')];
+      rows[rows.indexOf(document.activeElement) + step]?.focus();
+    });
+    ui.crumbs.addEventListener('click', (event) => {
+      const crumb = event.target.closest('button');
+      if (!crumb || !active) return;
+      const { left, bottom } = crumb.getBoundingClientRect();
+      if (crumb.dataset.dir) {
+        // A folder of the path: show it in the explorer.
+        if (!prefs.sidebar) toggleSidebar();
+        showView('files');
+        revealInTree(crumb.dataset.dir);
+        findRow(crumb.dataset.dir)?.focus();
+      } else if (crumb.dataset.level) {
+        // A symbol: offer the ones beside it.
+        const level = Number(crumb.dataset.level);
+        const siblings = level ? outline.chain[level - 1].children : outline.symbols;
+        showMenu(left, bottom + 2, siblings.map((symbol) => ({ label: symbol.name, run: () => goToLine(symbol.line) })));
+      } else {
+        if (!prefs.sidebar) toggleSidebar();
+        showView(outline.symbols.length ? 'outline' : 'files');
+      }
+    });
+  }
+
+  // Waits for a pause in typing; pass 0 when the file itself changed.
+  function scheduleOutline(delay = 400) {
+    clearTimeout(outline.timer);
+    outline.timer = setTimeout(refreshOutline, delay);
+  }
+
+  async function refreshOutline() {
+    const tab = active && !active.image ? active : null;
+    const run = ++outline.run;
+    if (outline.tab !== tab) outline.collapsed.clear();
+    outline.tab = tab;
+    let symbols = null;
+    try {
+      symbols = tab && await readSymbols(tab.model);
+    } catch {
+      // A worker that isn't ready yet, or a file too odd to scan: show no outline.
+    }
+    if (run !== outline.run) return;
+    outline.supported = Boolean(symbols);
+    outline.symbols = symbols || [];
+    outline.chain = symbolChain();
+    renderOutline();
+    renderCrumbs();
+  }
+
+  // Symbols as { name, detail, kind, line, end, children }, or null when the language has none.
+  async function readSymbols(model) {
+    const language = model.getLanguageId();
+    if (language === 'php') return fromDocumentSymbols(window.CPM_PHP_MEMBERS.outline(model, monaco));
+    if (language === 'javascript' || language === 'typescript') return scriptSymbols(model, language);
+    if (language === 'css' || language === 'scss' || language === 'less') return styleSymbols(model.getValue());
+    if (language === 'markdown') return markdownSymbols(model.getValue());
+    return null;
+  }
+
+  function fromDocumentSymbols(list) {
+    const Kind = monaco.languages.SymbolKind;
+    const kinds = { [Kind.Class]: 'class', [Kind.Interface]: 'interface', [Kind.Enum]: 'enum', [Kind.Method]: 'method', [Kind.Function]: 'function', [Kind.Property]: 'property', [Kind.Constant]: 'constant', [Kind.EnumMember]: 'constant' };
+    return list
+      .map((symbol) => ({
+        name: symbol.name,
+        detail: symbol.detail || '',
+        kind: kinds[symbol.kind] || 'variable',
+        line: symbol.range.startLineNumber,
+        end: symbol.range.endLineNumber,
+        children: fromDocumentSymbols(symbol.children || []),
+      }))
+      .sort((a, b) => a.line - b.line);
+  }
+
+  // Monaco's own JavaScript/TypeScript service already knows the file's structure.
+  async function scriptSymbols(model, language) {
+    const ts = monaco.languages.typescript;
+    const getWorker = await (language === 'typescript' ? ts.getTypeScriptWorker() : ts.getJavaScriptWorker());
+    const worker = await getWorker(model.uri);
+    const tree = await worker.getNavigationTree(model.uri.toString());
+    if (model.isDisposed()) return [];
+    const kinds = { class: 'class', interface: 'interface', enum: 'enum', method: 'method', constructor: 'method', function: 'function', 'local function': 'function', property: 'property', getter: 'property', setter: 'property', const: 'constant', 'enum member': 'constant' };
+    const convert = (items) => (items || [])
+      .filter((item) => item.spans?.length && item.kind !== 'alias')
+      .map((item) => {
+        const span = item.spans[0];
+        return {
+          name: item.text,
+          detail: '',
+          kind: kinds[item.kind] || 'variable',
+          line: model.getPositionAt(span.start).lineNumber,
+          end: model.getPositionAt(span.start + span.length).lineNumber,
+          children: convert(item.childItems),
+        };
+      })
+      .sort((a, b) => a.line - b.line);
+    return convert(tree?.childItems);
+  }
+
+  // Rules and at-rules, nested the way their braces are. Comments and strings are skipped.
+  function styleSymbols(text) {
+    const root = { children: [] };
+    const stack = [root];
+    let line = 1;
+    // What has been read since the last ; { or }: a selector, if a { comes next.
+    let name = '';
+    let nameLine = 0;
+    // Inside Sass's #{…}, whose braces don't open a rule.
+    let interpolation = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (c === '/' && text[i + 1] === '*') {
+        const end = text.indexOf('*/', i + 2);
+        const stop = end === -1 ? text.length : end + 1;
+        for (let k = i; k < stop; k++) if (text[k] === '\n') line++;
+        i = stop;
+        continue;
+      }
+      let boundary = false;
+      if (c === '{' && text[i - 1] === '#') {
+        interpolation++;
+      } else if (c === '}' && interpolation) {
+        interpolation--;
+      } else if (c === '{') {
+        const symbol = { name: name.replace(/\s+/g, ' ').trim() || '{…}', detail: '', kind: 'rule', line: nameLine || line, end: line, children: [] };
+        stack[stack.length - 1].children.push(symbol);
+        stack.push(symbol);
+        boundary = true;
+      } else if (c === '}') {
+        if (stack.length > 1) stack.pop().end = line;
+        boundary = true;
+      } else if (c === ';') {
+        boundary = true;
+      }
+      if (boundary) {
+        name = '';
+        nameLine = 0;
+        continue;
+      }
+      if (!nameLine && /\S/.test(c)) nameLine = line;
+      name += c;
+      if (c === '\n') line++;
+      if (c === '"' || c === '\'') {
+        for (i++; i < text.length && text[i] !== c && text[i] !== '\n'; i++) {
+          name += text[i];
+          if (text[i] === '\\') name += text[++i] || '';
+        }
+        if (text[i] === c) name += c;
+        else i--;
+      }
+    }
+    return root.children;
+  }
+
+  function markdownSymbols(text) {
+    const root = { children: [], level: 0 };
+    const stack = [root];
+    const lines = text.split('\n');
+    let fence = '';
+    lines.forEach((content, index) => {
+      const mark = /^\s{0,3}(```+|~~~+)/.exec(content)?.[1];
+      if (mark && (!fence || mark.startsWith(fence))) fence = fence ? '' : mark;
+      const heading = !fence && !mark && /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(content);
+      if (!heading || !heading[2]) return;
+      const symbol = { name: heading[2], detail: '', kind: 'heading', line: index + 1, end: lines.length, level: heading[1].length, children: [] };
+      while (stack[stack.length - 1].level >= symbol.level) stack.pop().end = index;
+      stack[stack.length - 1].children.push(symbol);
+      stack.push(symbol);
+    });
+    return root.children;
+  }
+
+  // The symbols the cursor is inside, outermost first.
+  function symbolChain() {
+    const line = active && outline.tab === active && editor?.getPosition()?.lineNumber;
+    const chain = [];
+    let level = line ? outline.symbols : [];
+    for (;;) {
+      // The last one that starts at or before the cursor, so a heading owns the text below it.
+      const inside = level.filter((symbol) => symbol.line <= line && line <= symbol.end).pop();
+      if (!inside) return chain;
+      chain.push(inside);
+      level = inside.children;
+    }
+  }
+
+  function markOutline() {
+    const chain = symbolChain();
+    if (chain.length === outline.chain.length && chain.every((symbol, i) => symbol === outline.chain[i])) return;
+    outline.chain = chain;
+    const current = chain[chain.length - 1];
+    for (const row of ui.outline.querySelectorAll('.row')) row.classList.toggle('active', row.symbol === current);
+    renderCrumbs();
+  }
+
+  function symbolGlyph(kind) {
+    const glyph = document.createElement('span');
+    glyph.className = `symbol-kind kind-${kind}`;
+    glyph.textContent = SYMBOL_GLYPHS[kind] || '·';
+    glyph.setAttribute('aria-hidden', 'true');
+    return glyph;
+  }
+
+  function renderOutline() {
+    if (ui.outlineView.hidden) return;
+    const rows = document.createDocumentFragment();
+    const current = outline.chain[outline.chain.length - 1];
+    const append = (symbols, depth, prefix) => {
+      symbols.forEach((symbol, index) => {
+        const key = `${prefix}/${symbol.name}#${index}`;
+        const open = symbol.children.length > 0 && !outline.collapsed.has(key);
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = `row${symbol === current ? ' active' : ''}`;
+        row.symbol = symbol;
+        row.title = `${symbol.name}${symbol.detail ? ` ${symbol.detail}` : ''} — line ${symbol.line}`;
+        row.style.paddingLeft = `${8 + depth * 12}px`;
+        Object.assign(row.dataset, { key, line: symbol.line });
+        row.setAttribute('role', 'treeitem');
+        row.setAttribute('aria-level', String(depth + 1));
+        if (symbol.children.length) row.setAttribute('aria-expanded', String(open));
+
+        const chevron = icon('i-chevron', 'chevron');
+        if (!symbol.children.length) chevron.style.visibility = 'hidden';
+        const label = document.createElement('span');
+        label.textContent = symbol.name;
+        row.append(chevron, symbolGlyph(symbol.kind), label);
+        if (symbol.detail) {
+          const detail = document.createElement('span');
+          detail.className = 'kind';
+          detail.textContent = symbol.detail;
+          row.append(detail);
+        }
+        rows.append(row);
+        if (open) append(symbol.children, depth + 1, key);
+      });
+    };
+    append(outline.symbols, 0, '');
+    if (!outline.symbols.length) {
+      rows.append(noteRow(!outline.tab ? 'No file open' : outline.supported ? 'No symbols in this file' : 'No outline for this kind of file', 0));
+    }
+    ui.outline.replaceChildren(rows);
+    for (const [index, row] of [...ui.outline.querySelectorAll('.row')].entries()) row.tabIndex = index ? -1 : 0;
+  }
+
+  // The path to the file from the explorer's root, then the symbols around the cursor.
+  function renderCrumbs() {
+    const tab = active && !active.image ? active : null;
+    ui.crumbs.hidden = !tab || !settings.get('breadcrumbs.enabled');
+    if (ui.crumbs.hidden) return;
+    const crumb = (text, data, glyph) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      Object.assign(button.dataset, data);
+      const label = document.createElement('span');
+      label.textContent = text;
+      button.append(...(glyph ? [glyph] : []), label);
+      return button;
+    };
+    const parts = [];
+    const inRoot = rootDir && isInside(tab.path, rootDir);
+    let dir = inRoot ? rootDir : '';
+    const folders = !inRoot ? tab.dir : tab.dir === rootDir ? '' : relativePath(tab.dir, rootDir);
+    for (const name of folders.split('/').filter(Boolean)) {
+      dir = joinPath(dir, name);
+      parts.push(crumb(name, inRoot ? { dir } : {}));
+    }
+    parts.push(crumb(tab.file, {}, fileIcon(tab.file)));
+    outline.chain.forEach((symbol, level) => parts.push(crumb(symbol.name, { level }, symbolGlyph(symbol.kind))));
+    ui.crumbs.replaceChildren(...parts.flatMap((part, index) => (index ? [icon('i-chevron', 'chevron'), part] : [part])));
+    ui.crumbs.scrollLeft = ui.crumbs.scrollWidth;
   }
 
   function openSearch() {
@@ -4109,7 +4792,7 @@
   }
 
   function loadPrefs() {
-    const defaults = { theme: 'system', wrap: false, trustDismissed: false, sidebar: true, sidebarWidth: 240, splitWidth: 50 };
+    const defaults = { theme: 'system', wrap: false, trustDismissed: false, sidebar: true, sidebarWidth: 240, splitWidth: 50, panel: false, panelView: 'problems', panelHeight: 200 };
     try {
       return { ...defaults, ...JSON.parse(localStorage.getItem('cpm-prefs') || '{}') };
     } catch {

@@ -14,11 +14,12 @@
   const api2Url = `${session[0]}/json-api/cpanel`;
   // Bumped whenever the messages between this script and editor.js change, so a stale
   // script left in an open tab after an update is detected instead of misbehaving.
-  const PROTOCOL = 4;
+  const PROTOCOL = 5;
   const editorUrl = chrome.runtime.getURL('editor.html');
   const editorOrigin = new URL(editorUrl).origin;
   const requestedCharset = params.get('file_charset') || params.get('charset') || 'utf-8';
   const ARCHIVE_FORMATS = ['zip', 'tar', 'tar.gz', 'tar.bz2'];
+  const TAIL_WHOLE_MAX = 8 * 1024 * 1024;
 
   let dirty = false;
   let title = file;
@@ -35,6 +36,25 @@
       event.preventDefault();
       event.returnValue = '';
     }
+  });
+
+  // The close-tab command from background.js. Answering false lets it close the browser tab.
+  let closeReply = null;
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg?.source !== 'cpm' || msg.type !== 'close-tab') return false;
+    if (!frame) {
+      sendResponse(false);
+      return false;
+    }
+    closeReply?.(false);
+    const timer = setTimeout(() => closeReply?.(false), 500);
+    closeReply = (handled) => {
+      clearTimeout(timer);
+      closeReply = null;
+      sendResponse(handled);
+    };
+    post({ type: 'close-tab' });
+    return true;
   });
 
   function whenBody(callback) {
@@ -105,13 +125,17 @@
         title = msg.file || 'Editor';
         updateTitle();
         break;
+      case 'close-tab':
+        closeReply?.(Boolean(msg.handled));
+        break;
       case 'classic':
         unmount();
         break;
     }
   }
 
-  async function handleRequest({ op, dir: d, file: f, content, charset, newName, dest, mode, format, bytes, mime, overwrite, files, existingOk }) {
+  async function handleRequest({ op, dir: d, file: f, content, charset, newName, dest, mode, format, bytes, mime, overwrite, files, existingOk, limit, size }) {
+    if (op === 'domains') return listDomains();
     checkDir(d);
     if (op !== 'list') checkName(f);
     switch (op) {
@@ -205,9 +229,33 @@
         if (!res.ok) throw new Error(`cPanel returned HTTP ${res.status}.`);
         return { bytes: await res.arrayBuffer() };
       }
+      case 'tail': {
+        // The end of a file that may be far too big to read whole, such as an error log.
+        const max = Math.min(Math.max(Number(limit) || 0, 1024), 1024 * 1024);
+        const res = await fetch(downloadUrl(d, f), { credentials: 'same-origin', headers: { Range: `bytes=-${max}` } });
+        if (!res.ok) throw new Error(`cPanel returned HTTP ${res.status}.`);
+        // A server that ignores Range sends everything; don't pull a huge file in for its last lines.
+        const whole = res.status !== 206;
+        const length = Number(res.headers.get('content-length')) || Number(size) || 0;
+        if (whole && length > TAIL_WHOLE_MAX) {
+          res.body?.cancel();
+          throw new Error(`The file is ${Math.round(length / 1024 / 1024)} MB and this server only sends it whole. Empty or rotate it first.`);
+        }
+        const buffer = await res.arrayBuffer();
+        const cut = buffer.byteLength > max;
+        return { text: new TextDecoder().decode(cut ? buffer.slice(-max) : buffer), partial: !whole || cut };
+      }
       default:
         throw new Error(`Unknown request: ${op}`);
     }
+  }
+
+  // Every domain of the account with the folder it serves, to turn a file into its address.
+  async function listDomains() {
+    const data = await uapi('domains_data', { format: 'hash' }, false, `${session[0]}/execute/DomainInfo`);
+    return [data.main_domain, ...(data.addon_domains || []), ...(data.sub_domains || [])]
+      .filter((item) => item && item.domain && item.documentroot)
+      .map((item) => ({ domain: item.domain, root: item.documentroot.replace(/\/+$/, '') }));
   }
 
   function checkName(name) {
@@ -314,13 +362,13 @@
     return result.data;
   }
 
-  async function uapi(fn, fields, usePost = false) {
+  async function uapi(fn, fields, usePost = false, base = api) {
     const body = fields instanceof FormData ? fields : new URLSearchParams(fields);
     let res;
     try {
       res = usePost
-        ? await fetch(`${api}/${fn}`, { method: 'POST', body, credentials: 'same-origin' })
-        : await fetch(`${api}/${fn}?${body}`, { credentials: 'same-origin' });
+        ? await fetch(`${base}/${fn}`, { method: 'POST', body, credentials: 'same-origin' })
+        : await fetch(`${base}/${fn}?${body}`, { credentials: 'same-origin' });
     } catch {
       // fetch only says "Failed to fetch"; say what that means.
       throw new Error('The request never got an answer from cPanel. The connection dropped, or the server refused it (for an upload: often a size limit or a security rule).');

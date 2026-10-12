@@ -44,6 +44,8 @@ for (const file of ['LICENSE', 'ThirdPartyNotices.txt']) {
 
 manifest.version = version;
 manifest.author = 'Monir Saikat';
+// Firefox runs background scripts as event pages, not service workers.
+manifest.background = { scripts: [manifest.background.service_worker] };
 manifest.browser_specific_settings = {
   gecko: {
     id: 'cp-monaco@monirsaikat.github.io',
