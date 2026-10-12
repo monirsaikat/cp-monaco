@@ -14,7 +14,7 @@
   const api2Url = `${session[0]}/json-api/cpanel`;
   // Bumped whenever the messages between this script and editor.js change, so a stale
   // script left in an open tab after an update is detected instead of misbehaving.
-  const PROTOCOL = 3;
+  const PROTOCOL = 4;
   const editorUrl = chrome.runtime.getURL('editor.html');
   const editorOrigin = new URL(editorUrl).origin;
   const requestedCharset = params.get('file_charset') || params.get('charset') || 'utf-8';
@@ -111,7 +111,7 @@
     }
   }
 
-  async function handleRequest({ op, dir: d, file: f, content, charset, newName, dest, mode, format, blob, overwrite, files, existingOk }) {
+  async function handleRequest({ op, dir: d, file: f, content, charset, newName, dest, mode, format, bytes, mime, overwrite, files, existingOk }) {
     checkDir(d);
     if (op !== 'list') checkName(f);
     switch (op) {
@@ -176,7 +176,10 @@
         await api2('fileop', { op: 'extract', sourcefiles: joinPath(d, f), destfiles: dest, doubledecode: 0 });
         return {};
       case 'upload': {
-        if (!blob || typeof blob.size !== 'number') throw new Error('Nothing to upload.');
+        // The file arrives as plain bytes. A File object handed over from the editor's frame
+        // can't always be read on this side, and the upload then fails before it is sent.
+        if (!bytes || typeof bytes.byteLength !== 'number') throw new Error('Nothing to upload.');
+        const blob = new Blob([bytes], { type: mime || 'application/octet-stream' });
         const body = new FormData();
         body.append('dir', d);
         if (overwrite) body.append('overwrite', '1');
@@ -200,7 +203,7 @@
         // The raw bytes, for previewing images.
         const res = await fetch(downloadUrl(d, f), { credentials: 'same-origin' });
         if (!res.ok) throw new Error(`cPanel returned HTTP ${res.status}.`);
-        return { blob: await res.blob() };
+        return { bytes: await res.arrayBuffer() };
       }
       default:
         throw new Error(`Unknown request: ${op}`);
@@ -313,9 +316,15 @@
 
   async function uapi(fn, fields, usePost = false) {
     const body = fields instanceof FormData ? fields : new URLSearchParams(fields);
-    const res = usePost
-      ? await fetch(`${api}/${fn}`, { method: 'POST', body, credentials: 'same-origin' })
-      : await fetch(`${api}/${fn}?${body}`, { credentials: 'same-origin' });
+    let res;
+    try {
+      res = usePost
+        ? await fetch(`${api}/${fn}`, { method: 'POST', body, credentials: 'same-origin' })
+        : await fetch(`${api}/${fn}?${body}`, { credentials: 'same-origin' });
+    } catch {
+      // fetch only says "Failed to fetch"; say what that means.
+      throw new Error('The request never got an answer from cPanel. The connection dropped, or the server refused it (for an upload: often a size limit or a security rule).');
+    }
 
     let json;
     try {

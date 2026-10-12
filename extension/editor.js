@@ -145,7 +145,7 @@
   const QUICK_MAX_RESULTS = 60;
 
   // Must match PROTOCOL in content.js.
-  const PROTOCOL = 3;
+  const PROTOCOL = 4;
   const DRAFT_DELAY = 800;
   const HISTORY_MAX = 20;
   const HISTORY_DAYS = 30;
@@ -158,6 +158,7 @@
   const SEARCH_MAX_PER_FILE = 200;
   const SEARCH_CACHE_CHARS = 50 * 1024 * 1024;
   const UPLOAD_MAX_FILES = 2000;
+  const UPLOAD_MAX_SIZE = 200 * 1024 * 1024;
   // Indexing, searching and other bulk work is sent a few requests at a time, and held back
   // while anything the user asked for is on its way (see request()).
   const BACKGROUND_MAX = 4;
@@ -843,13 +844,14 @@
   // This page may only show pictures that are part of the extension or data: URLs, so the
   // bytes are fetched by content.js (from your cPanel) and inlined.
   async function loadImage(dir, file) {
-    const { blob } = await request({ op: 'blob', dir, file });
+    const { bytes } = await request({ op: 'blob', dir, file });
     const type = IMAGE_TYPES[extensionOf(file.toLowerCase())];
+    const blob = new Blob([bytes], { type });
     const url = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
       reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(new Blob([blob], { type }));
+      reader.readAsDataURL(blob);
     });
     return { url, size: blob.size };
   }
@@ -2937,7 +2939,10 @@
         const target = item.sub ? joinPath(dir, item.sub) : dir;
         setMessage(`Uploading ${item.file.name} (${++started} of ${items.length})…`);
         try {
-          await request({ op: 'upload', dir: target, file: item.file.name, blob: item.file, overwrite: existing.has(top(item)) });
+          if (item.file.size > UPLOAD_MAX_SIZE) throw new Error(`it is ${formatSize(item.file.size)}; upload files over ${formatSize(UPLOAD_MAX_SIZE)} with cPanel's File Manager`);
+          // Sent as bytes read here, where the file is certain to be readable.
+          const bytes = await item.file.arrayBuffer();
+          await request({ op: 'upload', dir: target, file: item.file.name, bytes, mime: item.file.type, overwrite: existing.has(top(item)) });
           dropSearchCache(joinPath(target, item.file.name));
         } catch (err) {
           failed.push(`${item.file.name}: ${err.message}`);
